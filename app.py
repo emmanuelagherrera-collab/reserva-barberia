@@ -214,7 +214,9 @@ def generar_link_pago(datos_reserva):
         # ⚠️ CAMBIO CLAVE: Poner tu URL real aquí cuando vayas a la nube
         # Si estás en local, usa localhost. Si vas a la nube, pon la de .app
         # url_base = "http://localhost:8501" 
-        url_base = "https://agendamiento-barberia.streamlit.app" 
+        #url_base = "https://agendamiento-barberia.streamlit.app" 
+        url_base = "https://reserva-barberia-9jzeauyq6n2eaosbgz6xec.streamlit.app/"
+        
 
         preference_data = {
             "items": [{"title": titulo_item, "quantity": 1, "unit_price": float(datos_reserva['abono']), "currency_id": "CLP"}],
