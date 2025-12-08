@@ -101,10 +101,25 @@ def cargar_servicios():
 
 def conectar_calendario():
     try:
-        creds = service_account.Credentials.from_service_account_file(
-            CREDENTIALS_FILE, scopes=['https://www.googleapis.com/auth/calendar'])
-        return build('calendar', 'v3', credentials=creds)
-    except: return None
+        # 1. Intentamos leer desde los Secretos de la Nube (Streamlit Cloud)
+        if "google_credentials" in st.secrets:
+            creds_dict = dict(st.secrets["google_credentials"])
+            creds = service_account.Credentials.from_service_account_info(
+                creds_dict, scopes=['https://www.googleapis.com/auth/calendar']
+            )
+            return build('calendar', 'v3', credentials=creds)
+            
+        # 2. Si falla, intentamos leer el archivo local (Tu PC)
+        else:
+            creds = service_account.Credentials.from_service_account_file(
+                CREDENTIALS_FILE, scopes=['https://www.googleapis.com/auth/calendar']
+            )
+            return build('calendar', 'v3', credentials=creds)
+            
+    except Exception as e:
+        # Esto imprimirá el error en la nube si falla para que sepamos qué pasó
+        print(f"Error conectando al calendario: {e}")
+        return None
 
 def sanitizar_input(texto):
     if not texto: return ""
