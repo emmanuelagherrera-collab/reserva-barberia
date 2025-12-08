@@ -188,25 +188,31 @@ def agendar_evento_confirmado(datos_cita, id_pago):
 
 def generar_link_pago(datos_reserva):
     if len(MP_ACCESS_TOKEN) < 10: return None, "⚠️ Error: Token inválido."
+    
     try:
         sdk = mercadopago.SDK(MP_ACCESS_TOKEN)
         referencia = empaquetar_datos(datos_reserva)
         
         titulo_item = f"Reserva: {datos_reserva['servicio']}"
-        
-        # Validar email para evitar rechazo de MP
         email_cliente = datos_reserva['email'] if "@" in datos_reserva['email'] else "test@user.com"
+
+        # ⚠️ CAMBIO CLAVE: Poner tu URL real aquí cuando vayas a la nube
+        # Si estás en local, usa localhost. Si vas a la nube, pon la de .app
+        # url_base = "http://localhost:8501" 
+        url_base = "https://agendamiento-barberia.streamlit.app" 
 
         preference_data = {
             "items": [{"title": titulo_item, "quantity": 1, "unit_price": float(datos_reserva['abono']), "currency_id": "CLP"}],
             "payer": {"email": email_cliente},
             "external_reference": referencia,
-            # Back URLs presentes pero sin auto_return forzoso
+            
             "back_urls": {
-                "success": "http://localhost:8501", 
-                "failure": "http://localhost:8501", 
-                "pending": "http://localhost:8501"
-            }
+                "success": url_base,
+                "failure": url_base,
+                "pending": url_base
+            },
+            # ✅ En Producción (Nube) SÍ puedes usar auto_return
+            "auto_return": "approved" 
         }
         
         result = sdk.preference().create(preference_data)
