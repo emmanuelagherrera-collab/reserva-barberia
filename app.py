@@ -210,7 +210,7 @@ def generar_link_pago(datos_reserva):
 
         # ⚠️ URL ACTUALIZADA SEGÚN TU CAPTURA DE PANTALLA
         # Esta es la URL que vi en tu imagen image_dbaf8f.png
-        url_base = "https://reserva-barberia-9jzeauyq6n2eaosbgz6xec.streamlit.app" 
+        url_base = "https://reserva-barberia-9jzeauyq6n2eaosbgz6xec.streamlit.app/"
 
         preference_data = {
             "items": [{"title": titulo_item, "quantity": 1, "unit_price": float(datos_reserva['abono']), "currency_id": "CLP"}],
