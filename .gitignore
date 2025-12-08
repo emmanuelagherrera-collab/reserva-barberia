@@ -1,0 +1,11 @@
+# Archivos de credenciales (NUNCA SUBIR)
+credentials.json
+secrets.toml
+.env
+
+# Archivos de sistema y caché
+__pycache__/
+*.pyc
+.DS_Store
+.streamlit/
+venv/
