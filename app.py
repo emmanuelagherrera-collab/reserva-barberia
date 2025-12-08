@@ -1,20 +1,18 @@
 import streamlit as st
 import pandas as pd
 import mercadopago
-import uuid
+import json
+import base64
+import urllib.parse
 from datetime import datetime, timedelta, time
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 import pytz
 import re
-import json
-import base64
-import urllib.parse 
 
 # ==========================================
 # 🔧 ZONA DE CONFIGURACIÓN
 # ==========================================
-# ⚠️ TUS DATOS (Mantenidos del código que me pasaste)
 CALENDAR_ID = "emmanuelagherrera@gmail.com"
 CREDENTIALS_FILE = 'credentials.json'
 URL_SHEETS = "https://docs.google.com/spreadsheets/d/e/2PACX-1vSQsZwUWKZAbBMSbJoOAoZOS6ZqbBoFEYAoSOHBvV7amaOPPkXxEYnTnHAelBa-g_EzFibe6jDyvMuc/pub?output=csv"
@@ -23,7 +21,6 @@ MP_ACCESS_TOKEN = "APP_USR-3110718966988352-120714-d3a0dd0e9831c38237e3450cea4fc
 # 📍 CONFIGURACIÓN DEL LOCAL
 UBICACION_LAT_LON = pd.DataFrame({'lat': [-33.5226], 'lon': [-70.5986]}) 
 LINK_WHATSAPP = "https://wa.me/56912345678" 
-
 ZONA_HORARIA = pytz.timezone('America/Santiago')
 
 st.set_page_config(page_title="Reserva Estilo", page_icon="💈", layout="wide")
@@ -52,16 +49,6 @@ def resetear_proceso():
     st.session_state.step = 1
     st.session_state.servicio_seleccionado = None
     st.session_state.datos_servicio = {}
-
-# ==========================================
-# 🔄 LÓGICA DE PAGO (Retorno)
-# ==========================================
-# 🚨 IMPORTANTE: Esto debe ir ANTES de la interfaz para que funcione siempre
-qp = st.query_params
-if "status" in qp and qp["status"] == "approved":
-    # (Funciones auxiliares para desempaquetar se definen abajo, 
-    # pero como Python lee en orden, movemos las funciones críticas arriba primero)
-    pass 
 
 # ==========================================
 # 🧠 BACKEND Y UTILIDADES
@@ -208,8 +195,7 @@ def generar_link_pago(datos_reserva):
         titulo_item = f"Reserva: {datos_reserva['servicio']}"
         email_cliente = datos_reserva['email'] if "@" in datos_reserva['email'] else "test@user.com"
 
-        # ⚠️ URL ACTUALIZADA SEGÚN TU CAPTURA DE PANTALLA
-        # Esta es la URL que vi en tu imagen image_dbaf8f.png
+        # ⚠️ ASEGÚRATE QUE ESTA URL ES TU URL DE STREAMLIT EXACTA
         url_base = "https://reserva-barberia-9jzeauyq6n2eaosbgz6xec.streamlit.app/"
 
         preference_data = {
@@ -232,44 +218,6 @@ def generar_link_pago(datos_reserva):
         return result["response"]["init_point"], None
         
     except Exception as e: return None, str(e)
-
-# ==========================================
-# 🔄 EJECUCIÓN LÓGICA RETORNO
-# ==========================================
-if "status" in qp and qp["status"] == "approved":
-    ref = qp.get("external_reference")
-    pid = qp.get("payment_id")
-    if ref:
-        data = desempaquetar_datos(ref)
-        if data:
-            with st.spinner("Registrando reserva..."):
-                if agendar_evento_confirmado(data, pid):
-                    st.balloons()
-                    st.success("✅ ¡Reserva Asegurada!")
-                    tel_ws = LINK_WHATSAPP.replace("https://wa.me/", "").replace("/", "")
-                    link_cambio_ui = generar_link_ws_dinamico(tel_ws, data['cliente'], f"{data['fecha']} {data['hora']}", data['servicio'])
-
-                    with st.container(border=True):
-                        st.markdown(f"""
-                        ### 🎫 Ticket de Atención
-                        * 🗓️ **Cuándo:** {data['fecha']} a las {data['hora']}
-                        * 💇 **Servicio:** {data['servicio']}
-                        * 💳 **Abono Pagado:** ${data['abono']:,}
-                        * 🏠 **Saldo Pendiente:** :red[**${data['pendiente']:,}**]
-                        ---
-                        ℹ️ **Importante:** Te enviamos una invitación a tu correo (**{data['email']}**). 
-                        """)
-                    
-                    c1, c2 = st.columns(2)
-                    with c1:
-                        if st.button("🏠 Inicio", use_container_width=True):
-                            st.query_params.clear()
-                            st.rerun()
-                    with c2:
-                        st.link_button("🔄 Modificar (WhatsApp)", link_cambio_ui, type="secondary", use_container_width=True)
-                    st.stop()
-                else: st.error("Error agendando. Contacta al local.")
-    st.stop()
 
 # ==========================================
 # 🖥️ SIDEBAR
@@ -325,7 +273,6 @@ elif st.session_state.step == 2:
         fecha = st.date_input("Fecha", min_value=hoy, max_value=hoy+timedelta(days=30))
         bloques = obtener_bloques_disponibles(fecha, svc['duracion']) if fecha else []
         
-        # 🔥 CORRECCIÓN DEL ERROR DE LA IMAGEN (Bloques vs Blocks)
         hora = st.selectbox("Hora", bloques) if bloques else None
         
         if not bloques: st.error("Sin disponibilidad.")
@@ -354,10 +301,72 @@ elif st.session_state.step == 2:
                     link, err = generar_link_pago(datos)
                     
                     if link:
-                        # 🚀 MAGIA DE REDIRECCIÓN: Lleva al usuario a MercadoPago sin clic extra
                         st.success("✅ Procesando... Redirigiendo a MercadoPago")
                         st.markdown(f'<meta http-equiv="refresh" content="0;url={link}">', unsafe_allow_html=True)
-                        # Botón de respaldo por si el navegador bloquea la redirección
                         st.link_button("👉 Si no redirige autom., haz clic aquí", link, type="primary", use_container_width=True)
                     else:
                         st.error(err)
+
+# ==========================================
+# 🔄 EJECUCIÓN LÓGICA RETORNO (CORREGIDO)
+# ==========================================
+# Capturamos los parámetros de la URL
+qp = st.query_params
+
+if "external_reference" in qp:
+    status = qp.get("status")
+    
+    # --- CASO 1: ERRORES O CANCELACIÓN ---
+    # Si 'status' es 'null', 'failure' o 'rejected', mostramos mensaje de error
+    if status == "null" or status == "failure" or status == "rejected":
+        st.warning("⚠️ El proceso de pago no se completó (o fue cancelado).")
+        st.info("No se ha realizado ningún cargo. Puedes intentar reservar nuevamente.")
+        
+        if st.button("🔄 Volver a intentar"):
+            st.query_params.clear() # Limpiamos la URL
+            st.rerun()              # Recargamos la app
+        st.stop() # Detenemos la ejecución aquí
+
+    # --- CASO 2: PAGO EXITOSO ---
+    elif status == "approved":
+        ref = qp.get("external_reference")
+        pid = qp.get("payment_id")
+        
+        if ref:
+            data = desempaquetar_datos(ref)
+            if data:
+                with st.spinner("Registrando reserva en calendario..."):
+                    # Intentamos guardar en Google Calendar
+                    if agendar_evento_confirmado(data, pid):
+                        st.balloons()
+                        st.success("✅ ¡Reserva Asegurada!")
+                        
+                        tel_ws = LINK_WHATSAPP.replace("https://wa.me/", "").replace("/", "")
+                        link_cambio_ui = generar_link_ws_dinamico(
+                            tel_ws, data['cliente'], 
+                            f"{data['fecha']} {data['hora']}", 
+                            data['servicio']
+                        )
+
+                        with st.container(border=True):
+                            st.markdown(f"""
+                            ### 🎫 Ticket de Atención
+                            * 🗓️ **Cuándo:** {data['fecha']} a las {data['hora']}
+                            * 💇 **Servicio:** {data['servicio']}
+                            * 💳 **Abono Pagado:** ${data['abono']:,}
+                            * 🏠 **Saldo Pendiente:** :red[**${data['pendiente']:,}**]
+                            ---
+                            ℹ️ **Importante:** Te enviamos una invitación a tu correo (**{data['email']}**). 
+                            """)
+                            
+                            c1, c2 = st.columns(2)
+                            with c1:
+                                if st.button("🏠 Inicio", use_container_width=True):
+                                    st.query_params.clear()
+                                    st.rerun()
+                            with c2:
+                                st.link_button("🔄 Modificar (WhatsApp)", link_cambio_ui, type="secondary", use_container_width=True)
+                        st.stop()
+                    else: 
+                        st.error("Hubo un problema registrando la hora en el calendario, pero el pago fue exitoso. Por favor contacta al local.")
+                        st.stop()
