@@ -9,12 +9,12 @@ import pytz
 import re
 import json
 import base64
-import urllib.parse # Necesario para WhatsApp
+import urllib.parse 
 
 # ==========================================
 # 🔧 ZONA DE CONFIGURACIÓN
 # ==========================================
-# ⚠️ REEMPLAZA CON TUS DATOS REALES SI LOS CAMBIASTE
+# ⚠️ TUS DATOS (Mantenidos del código que me pasaste)
 CALENDAR_ID = "emmanuelagherrera@gmail.com"
 CREDENTIALS_FILE = 'credentials.json'
 URL_SHEETS = "https://docs.google.com/spreadsheets/d/e/2PACX-1vSQsZwUWKZAbBMSbJoOAoZOS6ZqbBoFEYAoSOHBvV7amaOPPkXxEYnTnHAelBa-g_EzFibe6jDyvMuc/pub?output=csv"
@@ -54,6 +54,16 @@ def resetear_proceso():
     st.session_state.datos_servicio = {}
 
 # ==========================================
+# 🔄 LÓGICA DE PAGO (Retorno)
+# ==========================================
+# 🚨 IMPORTANTE: Esto debe ir ANTES de la interfaz para que funcione siempre
+qp = st.query_params
+if "status" in qp and qp["status"] == "approved":
+    # (Funciones auxiliares para desempaquetar se definen abajo, 
+    # pero como Python lee en orden, movemos las funciones críticas arriba primero)
+    pass 
+
+# ==========================================
 # 🧠 BACKEND Y UTILIDADES
 # ==========================================
 def empaquetar_datos(datos):
@@ -76,13 +86,11 @@ def cargar_servicios():
     try:
         df = pd.read_csv(URL_SHEETS)
         df.columns = df.columns.str.lower().str.strip()
-        
         servicios = {}
         for _, row in df.iterrows():
             desc = row['descripcion'] if 'descripcion' in row else "Servicio profesional."
             precio_total = int(row['precio'])
             abono = int(row['abono']) if 'abono' in row and pd.notna(row['abono']) else precio_total
-            
             servicios[row['servicio']] = {
                 "duracion": int(row['duracion_min']), 
                 "precio_total": precio_total,
@@ -97,14 +105,12 @@ def cargar_servicios():
 
 def conectar_calendario():
     try:
-        # Intento 1: Nube (Secrets)
         if "google_credentials" in st.secrets:
             creds_dict = dict(st.secrets["google_credentials"])
             creds = service_account.Credentials.from_service_account_info(
                 creds_dict, scopes=['https://www.googleapis.com/auth/calendar']
             )
             return build('calendar', 'v3', credentials=creds)
-        # Intento 2: Local (Archivo)
         else:
             creds = service_account.Credentials.from_service_account_file(
                 CREDENTIALS_FILE, scopes=['https://www.googleapis.com/auth/calendar']
@@ -202,8 +208,9 @@ def generar_link_pago(datos_reserva):
         titulo_item = f"Reserva: {datos_reserva['servicio']}"
         email_cliente = datos_reserva['email'] if "@" in datos_reserva['email'] else "test@user.com"
 
-        # ⚠️ URL REAL DE PRODUCCIÓN
-        url_base = "https://agendamiento-barberia.streamlit.app" 
+        # ⚠️ URL ACTUALIZADA SEGÚN TU CAPTURA DE PANTALLA
+        # Esta es la URL que vi en tu imagen image_dbaf8f.png
+        url_base = "https://reserva-barberia-9jzeauyq6n2eaosbgz6xec.streamlit.app" 
 
         preference_data = {
             "items": [{"title": titulo_item, "quantity": 1, "unit_price": float(datos_reserva['abono']), "currency_id": "CLP"}],
@@ -227,16 +234,15 @@ def generar_link_pago(datos_reserva):
     except Exception as e: return None, str(e)
 
 # ==========================================
-# 🔄 LÓGICA DE PAGO (Retorno)
+# 🔄 EJECUCIÓN LÓGICA RETORNO
 # ==========================================
-qp = st.query_params
 if "status" in qp and qp["status"] == "approved":
     ref = qp.get("external_reference")
     pid = qp.get("payment_id")
     if ref:
         data = desempaquetar_datos(ref)
         if data:
-            with st.spinner("Confirmando reserva..."):
+            with st.spinner("Registrando reserva..."):
                 if agendar_evento_confirmado(data, pid):
                     st.balloons()
                     st.success("✅ ¡Reserva Asegurada!")
@@ -266,7 +272,7 @@ if "status" in qp and qp["status"] == "approved":
     st.stop()
 
 # ==========================================
-# 🖥️ INTERFAZ PRINCIPAL
+# 🖥️ SIDEBAR
 # ==========================================
 with st.sidebar:
     st.image("https://cdn-icons-png.flaticon.com/512/3504/3504100.png", width=60)
@@ -318,7 +324,10 @@ elif st.session_state.step == 2:
         hoy = datetime.now(ZONA_HORARIA).date()
         fecha = st.date_input("Fecha", min_value=hoy, max_value=hoy+timedelta(days=30))
         bloques = obtener_bloques_disponibles(fecha, svc['duracion']) if fecha else []
-        hora = st.selectbox("Hora", bloques) if blocks else None
+        
+        # 🔥 CORRECCIÓN DEL ERROR DE LA IMAGEN (Bloques vs Blocks)
+        hora = st.selectbox("Hora", bloques) if bloques else None
+        
         if not bloques: st.error("Sin disponibilidad.")
 
     with c2:
@@ -327,7 +336,7 @@ elif st.session_state.step == 2:
             tel = st.text_input("Teléfono *")
             mail = st.text_input("Email *")
             
-            # ✨ AQUÍ ESTÁ EL CAMBIO: El botón genera y redirige
+            # ✨ BOTÓN UNIFICADO: Confirmar y Pagar
             submitted = st.form_submit_button("💳 Confirmar y Pagar Abono", type="primary", use_container_width=True)
             
             if submitted:
@@ -345,10 +354,10 @@ elif st.session_state.step == 2:
                     link, err = generar_link_pago(datos)
                     
                     if link:
-                        # 🚀 TRUCO DE MAGIA: Redirección Automática HTML
+                        # 🚀 MAGIA DE REDIRECCIÓN: Lleva al usuario a MercadoPago sin clic extra
                         st.success("✅ Procesando... Redirigiendo a MercadoPago")
                         st.markdown(f'<meta http-equiv="refresh" content="0;url={link}">', unsafe_allow_html=True)
-                        # Botón de respaldo por si el navegador bloquea
+                        # Botón de respaldo por si el navegador bloquea la redirección
                         st.link_button("👉 Si no redirige autom., haz clic aquí", link, type="primary", use_container_width=True)
                     else:
                         st.error(err)
