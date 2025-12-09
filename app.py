@@ -50,6 +50,10 @@ st.markdown("""
     .price-abono { font-size: 1.4rem; font-weight: 800; color: #2e7d32; text-align: right; }
     .price-total { font-size: 0.9rem; color: #757575; text-align: right; text-decoration: none; }
     .badge-pago { background-color: #e8f5e9; color: #2e7d32; padding: 4px 8px; border-radius: 4px; font-weight: bold; font-size: 0.8rem;}
+    #MainMenu {visibility: hidden;}
+    footer {visibility: hidden;}
+    header {visibility: hidden;}
+    .stDeployButton {display:none;}
 </style>
 """, unsafe_allow_html=True)
 
