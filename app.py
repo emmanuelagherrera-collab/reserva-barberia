@@ -10,48 +10,11 @@ from googleapiclient.discovery import build
 import pytz
 import re
 
-# 1. CONFIGURACIÓN
+# ==========================================
+# 🔧 ZONA DE CONFIGURACIÓN
+# ==========================================
 st.set_page_config(page_title="Reserva Estilo", page_icon="💈", layout="wide")
 
-# ==========================================
-# 🛑 EL PORTERO (SALA DE LLEGADA)
-# ==========================================
-# Si el usuario llega con CUALQUIER parámetro en la URL, lo atrapamos aquí.
-# No recargamos automáticamente. Le mostramos una pantalla de resultado.
-
-qp = st.query_params
-
-if "status" in qp or "external_reference" in qp or "collection_status" in qp:
-    status = qp.get("status")
-    
-    # PANTALLA DE RESULTADO
-    st.title("Proceso Finalizado 🏁")
-    
-    if status == "approved":
-        # ... Lógica de éxito (reproducir tickets, guardar en calendario, etc) ...
-        # (Aquí iría tu lógica de agendar_evento si el pago fue exitoso)
-        st.success("✅ El pago fue aprobado.")
-        st.info("Revisa tu correo para los detalles de la reserva.")
-        
-    else:
-        # CASO: VOLVER AL SITIO / FALLO
-        st.warning("⚠️ Volviste sin completar el pago o hubo un error.")
-        st.write("No te preocupes, no se ha realizado ningún cobro.")
-
-    # EL BOTÓN SALVAVIDAS
-    # Este botón es el que limpia la URL manualmente. Es infalible.
-    if st.button("🏠 Volver al Inicio (Limpiar)"):
-        st.query_params.clear() # Borra la basura de la URL
-        st.rerun()              # Recarga la app limpia
-    
-    st.stop() # 🛑 DETENEMOS TODO AQUÍ. El usuario no ve nada más hasta que presione el botón.
-
-# ==========================================
-# AQUI EMPIEZA TU APP NORMAL (Limpia)
-# ==========================================
-# Si el código pasa del st.stop() de arriba, es porque la URL está limpia.
-
-# TUS VARIABLES
 CALENDAR_ID = "emmanuelagherrera@gmail.com"
 CREDENTIALS_FILE = 'credentials.json'
 URL_SHEETS = "https://docs.google.com/spreadsheets/d/e/2PACX-1vSQsZwUWKZAbBMSbJoOAoZOS6ZqbBoFEYAoSOHBvV7amaOPPkXxEYnTnHAelBa-g_EzFibe6jDyvMuc/pub?output=csv"
@@ -60,9 +23,32 @@ UBICACION_LAT_LON = pd.DataFrame({'lat': [-33.5226], 'lon': [-70.5986]})
 LINK_WHATSAPP = "https://wa.me/56912345678" 
 ZONA_HORARIA = pytz.timezone('America/Santiago')
 
-# TUS FUNCIONES NECESARIAS
+# ==========================================
+# 🎨 ESTILOS CSS (ORIGINALES)
+# ==========================================
+st.markdown("""
+<style>
+    .stButton button { width: 100%; border-radius: 8px; font-weight: bold; }
+    div[data-testid="stVerticalBlock"] > div[data-testid="stVerticalBlock"] { background-color: transparent; }
+    .price-abono { font-size: 1.4rem; font-weight: 800; color: #2e7d32; text-align: right; }
+    .price-total { font-size: 0.9rem; color: #757575; text-align: right; text-decoration: none; }
+    .badge-pago { background-color: #e8f5e9; color: #2e7d32; padding: 4px 8px; border-radius: 4px; font-weight: bold; font-size: 0.8rem;}
+</style>
+""", unsafe_allow_html=True)
+
+# ==========================================
+# 🧠 FUNCIONES BACKEND
+# ==========================================
 def empaquetar_datos(datos):
     return base64.urlsafe_b64encode(json.dumps(datos).encode()).decode()
+
+def desempaquetar_datos(token):
+    try: return json.loads(base64.urlsafe_b64decode(token.encode()).decode())
+    except: return None
+
+def generar_link_ws_dinamico(tel, nombre, fecha, serv):
+    msg = urllib.parse.quote(f"Hola, soy {nombre}. Reserva: {fecha} - {serv}. Necesito modificarla.")
+    return f"https://wa.me/{tel}?text={msg}"
 
 @st.cache_data(ttl=60)
 def cargar_servicios():
@@ -92,7 +78,40 @@ def conectar_calendario():
         return build('calendar', 'v3', credentials=creds)
     except: return None
 
-def obtener_bloques(fecha, duracion):
+def agendar_evento_confirmado(datos, id_pago):
+    service = conectar_calendario()
+    if not service: return False
+    fecha = datetime.strptime(datos['fecha'], "%Y-%m-%d").date()
+    h, m = map(int, datos['hora'].split(":"))
+    dt_ini = ZONA_HORARIA.localize(datetime.combine(fecha, time(h, m)))
+    dt_fin = dt_ini + timedelta(minutes=datos['duracion'])
+    ws_link = generar_link_ws_dinamico(LINK_WHATSAPP.replace("https://wa.me/", ""), datos['cliente'], f"{datos['fecha']} {datos['hora']}", datos['servicio'])
+    body = {
+        'summary': f"✅ {datos['cliente']} - {datos['servicio']}",
+        'description': f"Abono Web: ${datos['abono']:,} (ID: {id_pago})\nPENDIENTE: ${datos['pendiente']:,}\nTel: {datos['tel']}\nCambios: {ws_link}",
+        'start': {'dateTime': dt_ini.isoformat()}, 'end': {'dateTime': dt_fin.isoformat()},
+        'attendees': [{'email': datos['email']}],
+        'colorId': '11'
+    }
+    try: service.events().insert(calendarId=CALENDAR_ID, body=body).execute(); return True
+    except: return False
+
+def generar_link_pago(datos):
+    sdk = mercadopago.SDK(MP_ACCESS_TOKEN)
+    # ⚠️ ASEGURATE QUE ESTA URL SEA CORRECTA
+    url_base = "https://reserva-barberia-9jzeauyq6n2eaosbgz6xec.streamlit.app/"
+    
+    pref = {
+        "items": [{"title": f"Reserva: {datos['servicio']}", "quantity": 1, "unit_price": float(datos['abono']), "currency_id": "CLP"}],
+        "payer": {"email": datos['email'] if "@" in datos['email'] else "cliente@test.com"},
+        "external_reference": empaquetar_datos(datos),
+        "back_urls": {"success": url_base, "failure": url_base, "pending": url_base},
+        "auto_return": "approved"
+    }
+    res = sdk.preference().create(pref)
+    return res["response"]["init_point"] if res["status"] in [200, 201] else None
+
+def obtener_bloques_disponibles(fecha, duracion):
     service = conectar_calendario()
     if not service: return []
     ini = ZONA_HORARIA.localize(datetime.combine(fecha, time.min)).astimezone(pytz.UTC).isoformat()
@@ -113,69 +132,140 @@ def obtener_bloques(fecha, duracion):
         act += timedelta(minutes=30)
     return bloques
 
-def generar_link_pago(datos):
-    sdk = mercadopago.SDK(MP_ACCESS_TOKEN)
-    url_base = "https://reserva-barberia-9jzeauyq6n2eaosbgz6xec.streamlit.app/"
+def validar_datos(nombre, email, telefono):
+    if not re.match(r"^[a-zA-ZáéíóúÁÉÍÓÚñÑ\s\']{2,50}$", nombre): return False, "Nombre inválido."
+    solo_numeros = re.sub(r"[^0-9]", "", telefono)
+    if not (8 <= len(solo_numeros) <= 15): return False, "Teléfono inválido."
+    if email and not re.match(r"^[\w\.-]+@[\w\.-]+\.\w+$", email): return False, "Email inválido."
+    return True, ""
+
+# ==========================================
+# 🔄 LÓGICA DE RETORNO INVISIBLE (AQUÍ ESTÁ LA SOLUCIÓN)
+# ==========================================
+# Esto se ejecuta ANTES de pintar la interfaz. 
+# Si hay basura en la URL, la limpia y recarga para mostrar la app normal.
+qp = st.query_params
+
+if "status" in qp or "external_reference" in qp:
+    status = qp.get("status")
     
-    # PREFERENCIA
-    pref = {
-        "items": [{"title": f"Reserva: {datos['servicio']}", "quantity": 1, "unit_price": float(datos['abono']), "currency_id": "CLP"}],
-        "payer": {"email": datos['email'] if "@" in datos['email'] else "cliente@test.com"},
-        "external_reference": empaquetar_datos(datos),
-        "back_urls": {"success": url_base, "failure": url_base, "pending": url_base},
-        "auto_return": "approved"
-    }
-    res = sdk.preference().create(pref)
-    return res["response"]["init_point"] if res["status"] in [200, 201] else None
+    # CASO 1: ÉXITO (Ticket) - Mantenemos la visual de éxito original
+    if status == "approved":
+        ref = qp.get("external_reference")
+        pid = qp.get("payment_id")
+        data = desempaquetar_datos(ref)
+        if data:
+            with st.spinner("Registrando reserva..."):
+                if agendar_evento_confirmado(data, pid):
+                    st.balloons()
+                    st.success("✅ ¡Reserva Asegurada!")
+                    tel_ws = LINK_WHATSAPP.replace("https://wa.me/", "").replace("/", "")
+                    link_cambio_ui = generar_link_ws_dinamico(tel_ws, data['cliente'], f"{data['fecha']} {data['hora']}", data['servicio'])
+                    
+                    with st.container(border=True):
+                        st.markdown(f"""
+                        ### 🎫 Ticket de Atención
+                        * 🗓️ **Cuándo:** {data['fecha']} a las {data['hora']}
+                        * 💇 **Servicio:** {data['servicio']}
+                        * 💳 **Abono Pagado:** ${data['abono']:,}
+                        * 🏠 **Saldo Pendiente:** :red[**${data['pendiente']:,}**]
+                        ---
+                        ℹ️ **Importante:** Te enviamos una invitación a tu correo (**{data['email']}**). 
+                        """)
+                        c1, c2 = st.columns(2)
+                        with c1:
+                            if st.button("🏠 Inicio", use_container_width=True):
+                                st.query_params.clear()
+                                st.rerun()
+                        with c2: st.link_button("🔄 Modificar", link_cambio_ui, use_container_width=True)
+                    st.stop() # Detenemos aquí para mostrar solo el ticket
 
-def validar_datos(n, e, t):
-    return True, "" # Simplificado para la prueba
+    # CASO 2: "VOLVER AL SITIO" (Status null/failure)
+    # Aquí está la clave: Limpiamos la URL y recargamos silenciosamente.
+    # El usuario verá la pantalla de inicio (Paso 1) tal como querías.
+    else:
+        st.query_params.clear()
+        st.rerun()
 
-# INTERFAZ NORMAL
+# ==========================================
+# 🖥️ VISUAL ORIGINAL (TU CÓDIGO INTACTO)
+# ==========================================
 if 'step' not in st.session_state: st.session_state.step = 1
+if 'servicio_seleccionado' not in st.session_state: st.session_state.servicio_seleccionado = None
 if 'datos_servicio' not in st.session_state: st.session_state.datos_servicio = {}
 
-def reset(): st.session_state.step = 1
-
-st.markdown("<style>.stButton button {width:100%; font-weight:bold;}</style>", unsafe_allow_html=True)
+def resetear_proceso():
+    st.session_state.step = 1
+    st.session_state.servicio_seleccionado = None
+    st.session_state.datos_servicio = {}
 
 with st.sidebar:
     st.image("https://cdn-icons-png.flaticon.com/512/3504/3504100.png", width=60)
     st.subheader("Barbería Pro")
     if st.session_state.step > 1:
-        if st.button("⬅️ Volver"): reset(); st.rerun()
+        st.divider()
+        if st.button("⬅️ Volver", type="secondary", use_container_width=True):
+            resetear_proceso()
+            st.rerun()
+    st.divider()
+    st.link_button("💬 Ayuda WhatsApp", LINK_WHATSAPP, type="primary", use_container_width=True)
+    st.write("") 
+    with st.container(border=True):
+        st.markdown("**🕒 Horario**\nLun - Sab\n:green[**10:00 - 20:00**]")
+    st.write(""); st.caption("📍 Av. Siempre Viva 123")
+    st.map(UBICACION_LAT_LON, zoom=15, size=20, height=150, use_container_width=True)
 
 st.title("💈 Reserva tu Turno")
-servicios = cargar_servicios()
+servicios_db = cargar_servicios()
 
+# >>> PASO 1: SELECCIÓN <<<
 if st.session_state.step == 1:
-    if not servicios: st.warning("Cargando servicios...")
-    for nom, info in servicios.items():
-        with st.container(border=True):
-            c1, c2 = st.columns([3, 1])
-            c1.markdown(f"### {nom}\n⏱️ {info['duracion']} min • Reserva: **${info['abono']:,}**")
-            c2.markdown(f"Total: ${info['precio_total']:,}")
-            if c2.button("Reservar", key=nom):
-                st.session_state.servicio_seleccionado = nom
-                st.session_state.datos_servicio = info
-                st.session_state.step = 2
-                st.rerun()
+    st.subheader("Selecciona un servicio")
+    if not servicios_db: st.warning("Cargando servicios...")
+    else:
+        for nombre, info in servicios_db.items():
+            with st.container(border=True):
+                c1, c2 = st.columns([3, 1])
+                with c1:
+                    st.markdown(f"### {nombre}")
+                    st.caption(f"⏱️ {info['duracion']} min • {info['descripcion']}")
+                    st.markdown(f"<span class='badge-pago'>Reserva con ${info['abono']:,}</span>", unsafe_allow_html=True)
+                with c2:
+                    st.markdown(f"<div class='price-total'>Total: ${info['precio_total']:,}</div>", unsafe_allow_html=True)
+                    st.markdown(f"<div class='price-abono'>Abono: ${info['abono']:,}</div>", unsafe_allow_html=True)
+                    if st.button("Reservar", key=f"btn_{nombre}", use_container_width=True):
+                        st.session_state.servicio_seleccionado = nombre
+                        st.session_state.datos_servicio = info
+                        st.session_state.step = 2
+                        st.rerun()
 
+# >>> PASO 2: FORMULARIO Y PAGO AUTOMÁTICO <<<
 elif st.session_state.step == 2:
     svc = st.session_state.datos_servicio
-    st.info(f"Reservando: **{st.session_state.servicio_seleccionado}**")
+    st.info(f"Reservando: **{st.session_state.servicio_seleccionado}** (Abono: ${svc['abono']:,})")
+    
     c1, c2 = st.columns(2)
     with c1:
-        fecha = st.date_input("Fecha", min_value=datetime.now(ZONA_HORARIA).date(), max_value=datetime.now(ZONA_HORARIA).date()+timedelta(days=30))
-        bloques = obtener_bloques(fecha, svc['duracion'])
+        hoy = datetime.now(ZONA_HORARIA).date()
+        fecha = st.date_input("Fecha", min_value=hoy, max_value=hoy+timedelta(days=30))
+        bloques = obtener_bloques_disponibles(fecha, svc['duracion']) if fecha else []
         hora = st.selectbox("Hora", bloques) if bloques else None
-        if not bloques: st.warning("Sin horas disponibles.")
+        if not bloques: st.error("Sin disponibilidad.")
     with c2:
-        with st.form("pago"):
-            n, e, t = st.text_input("Nombre"), st.text_input("Email"), st.text_input("Teléfono")
-            if st.form_submit_button("💳 Pagar Abono", type="primary"):
-                if n and e and t and hora:
-                    datos = {"fecha":str(fecha),"hora":hora,"cliente":n,"email":e,"tel":t,"servicio":st.session_state.servicio_seleccionado,"abono":svc['abono'],"precio_total":svc['precio_total'],"pendiente":svc['pendiente'],"duracion":svc['duracion']}
+        with st.form("form_final"):
+            nom = st.text_input("Nombre *")
+            tel = st.text_input("Teléfono *")
+            mail = st.text_input("Email *")
+            submitted = st.form_submit_button("💳 Confirmar y Pagar Abono", type="primary", use_container_width=True)
+            
+            if submitted:
+                ok, msg = validar_datos(nom, mail, tel)
+                if not ok: st.error(msg)
+                else:
+                    datos = {"fecha": str(fecha), "hora": hora, "servicio": st.session_state.servicio_seleccionado, "precio_total": svc['precio_total'], "abono": svc['abono'], "pendiente": svc['pendiente'], "duracion": svc['duracion'], "cliente": nom, "email": mail, "tel": tel}
                     link = generar_link_pago(datos)
-                    if link: st.link_button("👉 Ir a MercadoPago", link, type="primary")
-                else: st.error("Faltan datos")
+                    if link:
+                        st.success("✅ Procesando... Redirigiendo a MercadoPago")
+                        st.markdown(f'<meta http-equiv="refresh" content="0;url={link}">', unsafe_allow_html=True)
+                        st.link_button("👉 Si no redirige autom., haz clic aquí", link, type="primary", use_container_width=True)
+                    else: st.error("Error al generar pago.")
