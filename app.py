@@ -284,6 +284,49 @@ if "status" in qp and qp["status"] == "approved":
     st.stop()
 
 # ==========================================
+# 🔄 LÓGICA DE RETORNO (Cierre del Ciclo)
+# ==========================================
+# Esto revisa la URL al cargar la página para ver si volvimos de pagar
+qp = st.query_params
+
+if "status" in qp and qp["status"] == "approved":
+    # 1. Recuperamos los datos ocultos en la referencia
+    ref_code = qp.get("external_reference")
+    payment_id = qp.get("payment_id")
+    
+    if ref_code:
+        datos_recuperados = desempaquetar_datos(ref_code)
+        
+        if datos_recuperados:
+            with st.spinner("Pago validado. Finalizando reserva..."):
+                # 2. Llamamos a la función que SÍ agenda en Google Calendar
+                exito = agendar_evento_confirmado(datos_recuperados, payment_id)
+                
+                if exito:
+                    st.balloons() # 🎉
+                    st.success("✅ ¡PAGO EXITOSO Y CITA AGENDADA!")
+                    
+                    # 3. Mostramos el Ticket Final
+                    st.info(f"""
+                    **TICKET DE CONFIRMACIÓN**
+                    * 🗓️ **Fecha:** {datos_recuperados['fecha']}
+                    * 🕒 **Hora:** {datos_recuperados['hora']}
+                    * 💇‍♀️ **Servicio:** {datos_recuperados['servicio']}
+                    * 👤 **Cliente:** {datos_recuperados['cliente']}
+                    * 🆔 **Comprobante MP:** {payment_id}
+                    """)
+                    
+                    # Botón para limpiar la URL y volver al inicio
+                    if st.button("Volver al Inicio"): 
+                        st.query_params.clear()
+                        resetear_proceso() # Usamos tu función de reset
+                        st.rerun()
+                        
+                    st.stop() # Detenemos aquí para que no muestre el resto del formulario
+                else:
+                    st.error("El pago llegó, pero hubo un error guardando en el calendario.")
+
+# ==========================================
 # 🖥️ SIDEBAR
 # ==========================================
 with st.sidebar:
