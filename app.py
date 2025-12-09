@@ -9,386 +9,370 @@ import pytz
 import re
 import json
 import base64
-import urllib.parse # Necesario para WhatsApp
+import urllib.parse 
 
 # ==========================================
-# 🔧 ZONA DE CONFIGURACIÓN
+# ⚙️ CONFIGURACIÓN Y CARGA DE SECRETOS
 # ==========================================
-# ⚠️ REEMPLAZA CON TUS DATOS REALES
-CALENDAR_ID = "emmanuelagherrera@gmail.com"
-CREDENTIALS_FILE = 'credentials.json'
-URL_SHEETS = "https://docs.google.com/spreadsheets/d/e/2PACX-1vSQsZwUWKZAbBMSbJoOAoZOS6ZqbBoFEYAoSOHBvV7amaOPPkXxEYnTnHAelBa-g_EzFibe6jDyvMuc/pub?output=csv"
-MP_ACCESS_TOKEN = "APP_USR-3110718966988352-120714-d3a0dd0e9831c38237e3450cea4fc5ef-3044196256"
+st.set_page_config(page_title="Reserva Tu Hora", page_icon="tj", layout="wide")
 
-# 📍 CONFIGURACIÓN DEL LOCAL
-UBICACION_LAT_LON = pd.DataFrame({'lat': [-33.5226], 'lon': [-70.5986]}) 
-LINK_WHATSAPP = "https://wa.me/56912345678" 
+# URLs y Constantes Públicas
+SHEET_MENU_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vSQsZwUWKZAbBMSbJoOAoZOS6ZqbBoFEYAoSOHBvV7amaOPPkXxEYnTnHAelBa-g_EzFibe6jDyvMuc/pub?output=csv"
+LOCAL_COORDS = pd.DataFrame({'lat': [-33.5226], 'lon': [-70.5986]}) 
+WHATSAPP_LINK_BASE = "https://wa.me/56912345678" 
+TIMEZONE = pytz.timezone('America/Santiago')
 
-ZONA_HORARIA = pytz.timezone('America/Santiago')
+# Validación y Carga de Variables Sensibles (Secrets)
+try:
+    # 1. Identificador del Calendario (Email del dueño)
+    CALENDAR_TARGET_EMAIL = st.secrets["CALENDAR_ID"] 
+    
+    # 2. Token de MercadoPago
+    MP_SECRET_TOKEN = st.secrets["MP_ACCESS_TOKEN"]
+    
+    # 3. Credenciales de Google (Service Account)
+    # Convertimos el objeto de secretos a un diccionario estándar de Python
+    GOOGLE_JSON_CREDS = dict(st.secrets["google_credentials"])
 
-st.set_page_config(page_title="Reserva Estilo", page_icon="💈", layout="wide")
+    # 🔧 CORRECCIÓN CRÍTICA PARA LLAVES PRIVADAS:
+    # Reemplaza los saltos de linea literales '\\n' por reales '\n' si existen.
+    # Esto soluciona el error común "Invalid RSA Key" en Streamlit Cloud.
+    if "private_key" in GOOGLE_JSON_CREDS:
+        GOOGLE_JSON_CREDS["private_key"] = GOOGLE_JSON_CREDS["private_key"].replace("\\n", "\n")
+
+except FileNotFoundError:
+    st.error("❌ Error: No se encontró el archivo .streamlit/secrets.toml")
+    st.stop()
+except KeyError as e:
+    st.error(f"❌ Error de Configuración: Falta la variable {e} en los secretos.")
+    st.stop()
 
 # ==========================================
-# 🎨 ESTILOS CSS
+# 🎨 ESTILOS VISUALES (CSS)
 # ==========================================
 st.markdown("""
 <style>
-    .stButton button { width: 100%; border-radius: 8px; font-weight: bold; }
-    div[data-testid="stVerticalBlock"] > div[data-testid="stVerticalBlock"] { background-color: transparent; }
-    .price-abono { font-size: 1.4rem; font-weight: 800; color: #2e7d32; text-align: right; }
-    .price-total { font-size: 0.9rem; color: #757575; text-align: right; text-decoration: none; }
-    .badge-pago { background-color: #e8f5e9; color: #2e7d32; padding: 4px 8px; border-radius: 4px; font-weight: bold; font-size: 0.8rem;}
+    .stButton button { width: 100%; border-radius: 8px; font-weight: 600; }
+    .info-box { padding: 1rem; border-radius: 10px; background-color: #f0f2f6; margin-bottom: 1rem; }
+    .price-tag { font-size: 1.2rem; font-weight: bold; color: #2e7d32; }
+    .status-confirmed { color: #2e7d32; font-weight: bold; }
+    .status-pending { color: #ff9800; font-weight: bold; }
 </style>
 """, unsafe_allow_html=True)
 
 # ==========================================
-# 🧠 GESTIÓN DE ESTADO
+# 🧠 GESTIÓN DE SESIÓN (STATE)
 # ==========================================
 if 'step' not in st.session_state: st.session_state.step = 1
-if 'servicio_seleccionado' not in st.session_state: st.session_state.servicio_seleccionado = None
-if 'datos_servicio' not in st.session_state: st.session_state.datos_servicio = {}
+if 'selected_service' not in st.session_state: st.session_state.selected_service = None
+if 'service_details' not in st.session_state: st.session_state.service_details = {}
 
-def resetear_proceso():
+def reiniciar_flujo():
     st.session_state.step = 1
-    st.session_state.servicio_seleccionado = None
-    st.session_state.datos_servicio = {}
+    st.session_state.selected_service = None
+    st.session_state.service_details = {}
 
 # ==========================================
-# 🧠 BACKEND Y UTILIDADES
+# 🔌 FUNCIONES DE INTEGRACIÓN (Backend)
 # ==========================================
-def empaquetar_datos(datos):
-    json_str = json.dumps(datos)
-    return base64.urlsafe_b64encode(json_str.encode()).decode()
 
-def desempaquetar_datos(token):
+def get_calendar_service():
+    """Conecta a Google Calendar usando las credenciales procesadas."""
     try:
-        json_str = base64.urlsafe_b64decode(token.encode()).decode()
-        return json.loads(json_str)
-    except: return None
-
-def generar_link_ws_dinamico(telefono_local, nombre, fecha_hora, servicio):
-    mensaje = f"Hola 👋, soy {nombre}. Tengo una reserva el {fecha_hora} para {servicio}. Necesito modificarla."
-    mensaje_encoded = urllib.parse.quote(mensaje)
-    return f"https://wa.me/{telefono_local}?text={mensaje_encoded}"
-
-@st.cache_data(ttl=60)
-def cargar_servicios():
-    try:
-        df = pd.read_csv(URL_SHEETS)
-        # 🔥 LA SOLUCIÓN: Esto arregla el problema de "Precio" vs "precio"
-        df.columns = df.columns.str.lower().str.strip()
-        
-        servicios = {}
-        for _, row in df.iterrows():
-            desc = row['descripcion'] if 'descripcion' in row else "Servicio profesional."
-            
-            # Ahora es seguro leer 'precio' porque forzamos minúsculas arriba
-            precio_total = int(row['precio'])
-            abono = int(row['abono']) if 'abono' in row and pd.notna(row['abono']) else precio_total
-            
-            servicios[row['servicio']] = {
-                "duracion": int(row['duracion_min']), 
-                "precio_total": precio_total,
-                "abono": abono,
-                "pendiente": precio_total - abono,
-                "descripcion": desc
-            }
-        return servicios
+        creds = service_account.Credentials.from_service_account_info(
+            GOOGLE_JSON_CREDS, 
+            scopes=['https://www.googleapis.com/auth/calendar']
+        )
+        return build('calendar', 'v3', credentials=creds)
     except Exception as e:
-        # Esto nos ayudará si vuelve a fallar
-        st.error(f"Error leyendo Excel: {e}")
-        return {}
-
-def conectar_calendario():
-    try:
-        # 1. Intentamos leer desde los Secretos de la Nube (Streamlit Cloud)
-        if "google_credentials" in st.secrets:
-            creds_dict = dict(st.secrets["google_credentials"])
-            creds = service_account.Credentials.from_service_account_info(
-                creds_dict, scopes=['https://www.googleapis.com/auth/calendar']
-            )
-            return build('calendar', 'v3', credentials=creds)
-            
-        # 2. Si falla, intentamos leer el archivo local (Tu PC)
-        else:
-            creds = service_account.Credentials.from_service_account_file(
-                CREDENTIALS_FILE, scopes=['https://www.googleapis.com/auth/calendar']
-            )
-            return build('calendar', 'v3', credentials=creds)
-            
-    except Exception as e:
-        # Esto imprimirá el error en la nube si falla para que sepamos qué pasó
-        print(f"Error conectando al calendario: {e}")
+        st.error(f"Error de conexión con Google: {e}")
         return None
 
-def sanitizar_input(texto):
-    if not texto: return ""
-    texto = str(texto).strip()
-    return f"'{texto}" if texto.startswith(("=", "+", "-", "@")) else texto
+@st.cache_data(ttl=60)
+def fetch_services_data():
+    """Descarga y normaliza el menú de servicios desde Google Sheets."""
+    try:
+        df = pd.read_csv(SHEET_MENU_URL)
+        df.columns = df.columns.str.lower().str.strip() # Normalizar columnas
+        
+        inventory = {}
+        for _, row in df.iterrows():
+            # Manejo seguro de datos faltantes
+            desc = row['descripcion'] if 'descripcion' in row else "Sin descripción."
+            precio = int(row['precio'])
+            abono = int(row['abono']) if 'abono' in row and pd.notna(row['abono']) else precio
+            
+            inventory[row['servicio']] = {
+                "duration_min": int(row['duracion_min']), 
+                "total_price": precio,
+                "deposit_required": abono,
+                "balance_due": precio - abono,
+                "description": desc
+            }
+        return inventory
+    except Exception as e:
+        st.error(f"Error leyendo la lista de precios: {e}")
+        return {}
 
-def validar_datos(nombre, email, telefono):
-    if not re.match(r"^[a-zA-ZáéíóúÁÉÍÓÚñÑ\s\']{2,50}$", nombre): return False, "Nombre inválido."
-    solo_numeros = re.sub(r"[^0-9]", "", telefono)
-    if not (8 <= len(solo_numeros) <= 15): return False, "Teléfono inválido."
-    if email and not re.match(r"^[\w\.-]+@[\w\.-]+\.\w+$", email): return False, "Email inválido."
-    return True, ""
-
-def obtener_bloques_disponibles(fecha, duracion):
-    service = conectar_calendario()
+def check_availability(target_date, duration_minutes):
+    """Calcula bloques libres basándose en eventos existentes."""
+    service = get_calendar_service()
     if not service: return []
-    inicio_dia = datetime.combine(fecha, time.min)
-    fin_dia = datetime.combine(fecha, time.max)
-    inicio_utc = ZONA_HORARIA.localize(inicio_dia).astimezone(pytz.UTC).isoformat()
-    fin_utc = ZONA_HORARIA.localize(fin_dia).astimezone(pytz.UTC).isoformat()
-    events = service.events().list(calendarId=CALENDAR_ID, timeMin=inicio_utc, timeMax=fin_utc, singleEvents=True).execute().get('items', [])
     
-    hora_act = ZONA_HORARIA.localize(datetime.combine(fecha, time(10, 0))) 
-    hora_fin = ZONA_HORARIA.localize(datetime.combine(fecha, time(20, 0))) 
+    # Definir rango del día (UTC para la API)
+    day_start = datetime.combine(target_date, time.min)
+    day_end = datetime.combine(target_date, time.max)
     
-    bloques = []
-    while hora_act + timedelta(minutes=duracion) <= hora_fin:
-        fin_cand = hora_act + timedelta(minutes=duracion)
-        choque = False
+    utc_start = TIMEZONE.localize(day_start).astimezone(pytz.UTC).isoformat()
+    utc_end = TIMEZONE.localize(day_end).astimezone(pytz.UTC).isoformat()
+    
+    # Obtener eventos
+    events_result = service.events().list(
+        calendarId=CALENDAR_TARGET_EMAIL, 
+        timeMin=utc_start, 
+        timeMax=utc_end, 
+        singleEvents=True
+    ).execute()
+    events = events_result.get('items', [])
+    
+    # Reglas de Negocio: Horario de atención (10:00 a 20:00)
+    current_slot = TIMEZONE.localize(datetime.combine(target_date, time(10, 0))) 
+    close_time = TIMEZONE.localize(datetime.combine(target_date, time(20, 0))) 
+    
+    available_slots = []
+    
+    while current_slot + timedelta(minutes=duration_minutes) <= close_time:
+        slot_end = current_slot + timedelta(minutes=duration_minutes)
+        is_conflict = False
+        
         for ev in events:
-            start = ev['start'].get('dateTime'); end = ev['end'].get('dateTime')
-            if not start: continue
-            ev_start = datetime.fromisoformat(start).astimezone(ZONA_HORARIA)
-            ev_end = datetime.fromisoformat(end).astimezone(ZONA_HORARIA)
-            if (hora_act < ev_end) and (fin_cand > ev_start):
-                choque = True; break
-        if not choque: bloques.append(hora_act.strftime("%H:%M"))
-        hora_act += timedelta(minutes=30)
-    return bloques
+            # Ignorar eventos sin hora definida (todo el día)
+            if 'dateTime' not in ev['start']: continue
+            
+            ev_start = datetime.fromisoformat(ev['start']['dateTime']).astimezone(TIMEZONE)
+            ev_end = datetime.fromisoformat(ev['end']['dateTime']).astimezone(TIMEZONE)
+            
+            # Detectar colisión de horarios
+            if (current_slot < ev_end) and (slot_end > ev_start):
+                is_conflict = True
+                break
+        
+        if not is_conflict: 
+            available_slots.append(current_slot.strftime("%H:%M"))
+        
+        # Intervalo entre inicios de bloque (30 min)
+        current_slot += timedelta(minutes=30)
+        
+    return available_slots
 
-def agendar_evento_confirmado(datos_cita, id_pago):
-    service = conectar_calendario()
-    fecha = datetime.strptime(datos_cita['fecha'], "%Y-%m-%d").date()
-    h, m = map(int, datos_cita['hora'].split(":"))
-    dt_ini = ZONA_HORARIA.localize(datetime.combine(fecha, time(h, m)))
-    dt_fin = dt_ini + timedelta(minutes=datos_cita['duracion'])
+def create_calendar_event(booking_data, payment_id):
+    """Inserta el evento confirmado en el calendario."""
+    service = get_calendar_service()
+    if not service: return False
+
+    date_obj = datetime.strptime(booking_data['date_str'], "%Y-%m-%d").date()
+    h, m = map(int, booking_data['time_str'].split(":"))
     
-    telefono_ws = LINK_WHATSAPP.replace("https://wa.me/", "").replace("/", "")
-    link_cambio = generar_link_ws_dinamico(
-        telefono_ws, 
-        datos_cita['cliente'], 
-        f"{datos_cita['fecha']} {datos_cita['hora']}", 
-        datos_cita['servicio']
-    )
+    start_dt = TIMEZONE.localize(datetime.combine(date_obj, time(h, m)))
+    end_dt = start_dt + timedelta(minutes=booking_data['duration'])
+    
+    # Generar link para reagendar
+    clean_phone = WHATSAPP_LINK_BASE.replace("https://wa.me/", "").replace("/", "")
+    msg = f"Hola, soy {booking_data['client_name']}. Quiero modificar mi reserva del {booking_data['date_str']}."
+    wa_link = f"https://wa.me/{clean_phone}?text={urllib.parse.quote(msg)}"
 
-    evento = {
-        'summary': f"✅ {datos_cita['cliente']} - {datos_cita['servicio']}",
+    event_body = {
+        'summary': f"✅ {booking_data['client_name']} - {booking_data['service_name']}",
         'description': f"""
-        ESTADO: CONFIRMADO
+        ESTADO: CONFIRMADO (Pago ID: {payment_id})
         -----------------------------------
-        💰 Abono Web: ${datos_cita['abono']:,} (ID: {id_pago})
-        ⚠️ PENDIENTE EN LOCAL: ${datos_cita['pendiente']:,}
+        Cliente: {booking_data['client_name']}
+        Email: {booking_data['client_email']}
+        Tel: {booking_data['client_phone']}
         -----------------------------------
-        PARA CAMBIAR TU HORA:
-        Haz clic aquí para avisar por WhatsApp:
-        {link_cambio}
+        💰 Pagado: ${booking_data['deposit']:,}
+        ⚠️ PENDIENTE: ${booking_data['balance']:,}
         -----------------------------------
-        Cliente: {datos_cita['cliente']}
-        Tel: {datos_cita['tel']}
-        Email: {datos_cita['email']}
+        [Link para contactar por cambio]({wa_link})
         """,
-        'attendees': [{'email': datos_cita['email']}], 
-        'start': {'dateTime': dt_ini.isoformat()}, 'end': {'dateTime': dt_fin.isoformat()},
-        'colorId': '11'
+        'start': {'dateTime': start_dt.isoformat()}, 
+        'end': {'dateTime': end_dt.isoformat()},
+        'attendees': [{'email': booking_data['client_email']}],
+        'colorId': '11' # Rojo en Google Calendar
     }
     
     try: 
-        service.events().insert(calendarId=CALENDAR_ID, body=evento, sendUpdates='all').execute()
+        service.events().insert(calendarId=CALENDAR_TARGET_EMAIL, body=event_body, sendUpdates='all').execute()
         return True
-    except: return False
+    except Exception as e:
+        print(f"Fallo al insertar evento: {e}")
+        return False
 
-def generar_link_pago(datos_reserva):
-    if len(MP_ACCESS_TOKEN) < 10: return None, "⚠️ Error: Token inválido."
-    
+# ==========================================
+# 💳 UTILIDADES DE PAGO Y URL
+# ==========================================
+def encode_payload(data):
+    return base64.urlsafe_b64encode(json.dumps(data).encode()).decode()
+
+def decode_payload(token):
+    try: return json.loads(base64.urlsafe_b64decode(token.encode()).decode())
+    except: return None
+
+def generate_payment_preference(booking_data):
     try:
-        sdk = mercadopago.SDK(MP_ACCESS_TOKEN)
-        referencia = empaquetar_datos(datos_reserva)
+        sdk = mercadopago.SDK(MP_SECRET_TOKEN)
         
-        titulo_item = f"Reserva: {datos_reserva['servicio']}"
-        email_cliente = datos_reserva['email'] if "@" in datos_reserva['email'] else "test@user.com"
-
-        # ⚠️ CAMBIO CLAVE: Poner tu URL real aquí cuando vayas a la nube
-        # Si estás en local, usa localhost. Si vas a la nube, pon la de .app
-        # url_base = "http://localhost:8501" 
-        url_base = "https://reserva-barberia-9jzeauyq6n2eaosbgz6xec.streamlit.app/" 
-
-        preference_data = {
-            "items": [{"title": titulo_item, "quantity": 1, "unit_price": float(datos_reserva['abono']), "currency_id": "CLP"}],
-            "payer": {"email": email_cliente},
-            "external_reference": referencia,
-            
+        # URL de retorno (Ajustar a tu URL real de Streamlit)
+        current_url = "https://reserva-barberia-9jzeauyq6n2eaosbgz6xec.streamlit.app/" 
+        
+        preference = {
+            "items": [{
+                "title": f"Reserva: {booking_data['service_name']}",
+                "quantity": 1,
+                "unit_price": float(booking_data['deposit']),
+                "currency_id": "CLP"
+            }],
+            "payer": {"email": booking_data['client_email']},
+            "external_reference": encode_payload(booking_data),
             "back_urls": {
-                "success": url_base,
-                "failure": url_base,
-                "pending": url_base
+                "success": current_url,
+                "failure": current_url,
+                "pending": current_url
             },
-            # ✅ En Producción (Nube) SÍ puedes usar auto_return
-            "auto_return": "approved" 
+            "auto_return": "approved"
         }
         
-        result = sdk.preference().create(preference_data)
-        
-        if result["status"] not in [200, 201]:
-             err_msg = result.get("response", {}).get("message", "Error desconocido")
-             return None, f"MP Error: {err_msg}"
-             
-        return result["response"]["init_point"], None
+        result = sdk.preference().create(preference)
+        if result["status"] == 201:
+            return result["response"]["init_point"], None
+        return None, "Error creando preferencia en MercadoPago"
         
     except Exception as e: return None, str(e)
 
 # ==========================================
-# 🔄 LÓGICA DE PAGO (Retorno)
+# 🔄 MANEJO DE RETORNO DE PAGO
 # ==========================================
 qp = st.query_params
 if "status" in qp and qp["status"] == "approved":
-    ref = qp.get("external_reference")
-    pid = qp.get("payment_id")
-    if ref:
-        data = desempaquetar_datos(ref)
+    ref_token = qp.get("external_reference")
+    pay_id = qp.get("payment_id")
+    
+    if ref_token:
+        data = decode_payload(ref_token)
         if data:
-            with st.spinner("Registrando reserva..."):
-                if agendar_evento_confirmado(data, pid):
+            with st.spinner("Confirmando tu cita en el calendario..."):
+                if create_calendar_event(data, pay_id):
                     st.balloons()
-                    st.success("✅ ¡Reserva Asegurada!")
+                    st.success("✅ ¡Reserva Exitosa!")
+                    st.markdown(f"""
+                    <div class='info-box'>
+                        <h4>Detalles de la Cita</h4>
+                        <p><strong>Servicio:</strong> {data['service_name']}</p>
+                        <p><strong>Fecha:</strong> {data['date_str']} a las {data['time_str']}</p>
+                        <p><strong>Pendiente a pagar en local:</strong> ${data['balance']:,}</p>
+                    </div>
+                    """, unsafe_allow_html=True)
                     
-                    tel_ws = LINK_WHATSAPP.replace("https://wa.me/", "").replace("/", "")
-                    link_cambio_ui = generar_link_ws_dinamico(tel_ws, data['cliente'], f"{data['fecha']} {data['hora']}", data['servicio'])
-
-                    with st.container(border=True):
-                        st.markdown(f"""
-                        ### 🎫 Ticket de Atención
-                        * 🗓️ **Cuándo:** {data['fecha']} a las {data['hora']}
-                        * 💇 **Servicio:** {data['servicio']}
-                        * 💳 **Abono Pagado:** ${data['abono']:,}
-                        * 🏠 **Saldo Pendiente:** :red[**${data['pendiente']:,}**]
-                        
-                        ---
-                        ℹ️ **Importante:** Te enviamos una invitación a tu correo (**{data['email']}**). 
-                        Si necesitas cambiar la hora, busca el enlace en ese correo.
-                        """)
-                    
-                    c_inicio, c_cambio = st.columns(2)
-                    with c_inicio:
-                        if st.button("🏠 Volver al Inicio", use_container_width=True):
-                            st.query_params.clear()
-                            st.rerun()
-                    with c_cambio:
-                        st.link_button("🔄 Cambio via WhatsApp", link_cambio_ui, type="secondary", use_container_width=True)
-                    
+                    if st.button("Volver al Inicio"):
+                        st.query_params.clear()
+                        st.rerun()
                     st.stop()
-                else: st.error("Error agendando, pero tu pago llegó. Contacta al local.")
+                else:
+                    st.error("El pago fue recibido, pero hubo un error agendando en el calendario. Por favor, guarda tu comprobante y contáctanos.")
     st.stop()
 
 # ==========================================
-# 🖥️ SIDEBAR
+# 🖥️ INTERFAZ DE USUARIO (Frontend)
 # ==========================================
+
+# Sidebar Informativo
 with st.sidebar:
-    st.image("https://cdn-icons-png.flaticon.com/512/3504/3504100.png", width=60)
-    st.subheader("Barbería Pro")
-
+    st.header("📍 Tu Barbería")
     if st.session_state.step > 1:
-        st.divider()
-        if st.button("⬅️ Volver al Inicio", type="secondary", use_container_width=True):
-            resetear_proceso()
+        if st.button("⬅️ Cancelar y Volver"):
+            reiniciar_flujo()
             st.rerun()
-
-    st.divider()
-    st.markdown("### ¿Ayuda?")
-    st.link_button("💬 WhatsApp", LINK_WHATSAPP, type="primary", use_container_width=True)
     
-    st.write("") 
-    with st.container(border=True):
-        st.markdown("**🕒 Horario**")
-        st.caption("Lun - Sab")
-        st.markdown(":green[**10:00 - 20:00**]")
+    st.divider()
+    st.map(LOCAL_COORDS, zoom=15, height=200)
+    st.markdown("**Horario:** 10:00 - 20:00")
+    st.link_button("Contactar por WhatsApp", WHATSAPP_LINK_BASE)
 
-    st.write(""); st.caption("📍 Av. Siempre Viva 123")
-    st.map(UBICACION_LAT_LON, zoom=15, size=20, height=150, use_container_width=True)
-
-# ==========================================
-# 🖥️ CUERPO PRINCIPAL
-# ==========================================
-st.title("💈 Reserva tu Turno")
-servicios_db = cargar_servicios()
+# Cuerpo Principal
+st.title("✂️ Reserva Online")
+services = fetch_services_data()
 
 if st.session_state.step == 1:
-    st.subheader("Selecciona un servicio")
-    
-    if not servicios_db:
-        st.warning("No se cargaron los servicios.")
+    st.subheader("Elige tu servicio")
+    if not services:
+        st.warning("No se pudo cargar el menú de servicios.")
     else:
-        for nombre, info in servicios_db.items():
+        for name, details in services.items():
             with st.container(border=True):
                 c1, c2 = st.columns([3, 1])
-                with c1:
-                    st.markdown(f"### {nombre}")
-                    st.caption(f"⏱️ {info['duracion']} min • {info['descripcion']}")
-                    st.markdown(f"<span class='badge-pago'>Reserva con ${info['abono']:,}</span>", unsafe_allow_html=True)
-                with c2:
-                    st.markdown(f"<div class='price-total'>Total: ${info['precio_total']:,}</div>", unsafe_allow_html=True)
-                    st.markdown(f"<div class='price-abono'>Abono: ${info['abono']:,}</div>", unsafe_allow_html=True)
-                    
-                    if st.button("Reservar", key=f"btn_{nombre}", use_container_width=True):
-                        st.session_state.servicio_seleccionado = nombre
-                        st.session_state.datos_servicio = info
-                        st.session_state.step = 2
-                        st.rerun()
+                c1.markdown(f"**{name}**")
+                c1.caption(f"{details['duration_min']} min • {details['description']}")
+                
+                c2.markdown(f"<div class='price-tag'>${details['total_price']:,}</div>", unsafe_allow_html=True)
+                if c2.button("Agendar", key=f"btn_{name}"):
+                    st.session_state.selected_service = name
+                    st.session_state.service_details = details
+                    st.session_state.step = 2
+                    st.rerun()
 
 elif st.session_state.step == 2:
-    svc = st.session_state.datos_servicio
-    st.info(f"""
-    Estás reservando: **{st.session_state.servicio_seleccionado}**
-    * Total: ${svc['precio_total']:,}
-    * **A pagar ahora: ${svc['abono']:,}**
-    * Pendiente: ${svc['pendiente']:,}
-    """)
+    svc_name = st.session_state.selected_service
+    svc_info = st.session_state.service_details
     
-    col_cal, col_dat = st.columns([1, 1])
+    st.markdown(f"### Reservando: **{svc_name}**")
+    st.info(f"Abono requerido: ${svc_info['deposit_required']:,} (Saldo pendiente: ${svc_info['balance_due']:,})")
     
-    with col_cal:
-        st.subheader("1. Fecha y Hora")
-        hoy = datetime.now(ZONA_HORARIA).date()
-        fecha = st.date_input("Día", min_value=hoy, max_value=hoy+timedelta(days=30))
+    col_date, col_form = st.columns(2)
+    
+    with col_date:
+        st.subheader("1. Fecha")
+        today = datetime.now(TIMEZONE).date()
+        date_sel = st.date_input("Selecciona día", min_value=today, max_value=today+timedelta(days=20))
         
-        bloques = []
-        if fecha:
-            with st.spinner("Buscando horas..."):
-                bloques = obtener_bloques_disponibles(fecha, svc['duracion'])
+        slots = []
+        if date_sel:
+            with st.spinner("Verificando disponibilidad..."):
+                slots = check_availability(date_sel, svc_info['duration_min'])
             
-            if not bloques:
-                st.error("Sin horas.")
-                hora = None
+            if not slots:
+                st.warning("No quedan horas disponibles para este día.")
             else:
-                hora = st.selectbox("Horas libres", bloques, placeholder="Elige...")
+                time_sel = st.selectbox("Horarios disponibles", slots)
 
-    with col_dat:
-        st.subheader("2. Tus Datos")
-        if 'hora' in locals() and hora:
-            with st.form("confirmar"):
-                nom = st.text_input("Nombre *")
-                tel = st.text_input("Teléfono *")
-                mail = st.text_input("Email *", help="Te llegará la invitación aquí")
+    with col_form:
+        st.subheader("2. Datos")
+        if 'time_sel' in locals() and slots:
+            with st.form("booking_form"):
+                fname = st.text_input("Nombre Completo")
+                femail = st.text_input("Correo Electrónico")
+                fphone = st.text_input("Teléfono Móvil")
                 
-                st.divider()
-                st.markdown(f"Abono a pagar: :green[**${svc['abono']:,}**]")
+                submitted = st.form_submit_button("Ir al Pago 💳", type="primary")
                 
-                if st.form_submit_button("💳 Pagar Abono", type="primary", use_container_width=True):
-                    ok, msg = validar_datos(nom, mail, tel)
-                    if not ok: st.error(msg)
+                if submitted:
+                    if len(fname) < 3 or "@" not in femail or len(fphone) < 8:
+                        st.error("Por favor completa todos los datos correctamente.")
                     else:
-                        datos = {
-                            "fecha": str(fecha), "hora": hora,
-                            "servicio": st.session_state.servicio_seleccionado,
-                            "precio_total": svc['precio_total'],
-                            "abono": svc['abono'], 
-                            "pendiente": svc['pendiente'],
-                            "duracion": svc['duracion'],
-                            "cliente": nom, "email": mail, "tel": tel
+                        # Preparar paquete de datos
+                        booking_payload = {
+                            "date_str": str(date_sel),
+                            "time_str": time_sel,
+                            "service_name": svc_name,
+                            "duration": svc_info['duration_min'],
+                            "deposit": svc_info['deposit_required'],
+                            "balance": svc_info['balance_due'],
+                            "client_name": fname,
+                            "client_email": femail,
+                            "client_phone": fphone
                         }
-                        link, err = generar_link_pago(datos)
-                        if link: st.link_button("👉 IR A PAGAR", link, type="primary", use_container_width=True)
-                        else: st.error(err)
+                        
+                        link, err = generate_payment_preference(booking_payload)
+                        if link:
+                            st.link_button("👉 FINALIZAR RESERVA EN MERCADOPAGO", link, type="primary", use_container_width=True)
+                        else:
+                            st.error(f"Error de sistema: {err}")
