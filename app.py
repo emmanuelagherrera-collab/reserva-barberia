@@ -308,24 +308,45 @@ elif st.session_state.step == 2:
                         st.error(err)
 
 # ==========================================
-# 🔄 EJECUCIÓN LÓGICA RETORNO (CORREGIDO)
+# 🛑 LÓGICA DE RETORNO (PRIORITARIA)
 # ==========================================
-# Capturamos los parámetros de la URL
 qp = st.query_params
 
-if "external_reference" in qp:
+# Verificamos si volvemos de MP
+if "status" in qp or "external_reference" in qp:
     status = qp.get("status")
     
-    # --- CASO 1: ERRORES O CANCELACIÓN ---
-    # Si 'status' es 'null', 'failure' o 'rejected', mostramos mensaje de error
-    if status == "null" or status == "failure" or status == "rejected":
-        st.warning("⚠️ El proceso de pago no se completó (o fue cancelado).")
-        st.info("No se ha realizado ningún cargo. Puedes intentar reservar nuevamente.")
+    # --- CASO 1: FALLO / CANCELACIÓN / VOLVER AL SITIO ---
+    # Detectamos 'null' como texto, falla, rechazo o payment_id nulo
+    if str(status) == "null" or status == "failure" or status == "rejected" or qp.get("payment_id") == "null":
         
-        if st.button("🔄 Volver a intentar"):
-            st.query_params.clear() # Limpiamos la URL
-            st.rerun()              # Recargamos la app
-        st.stop() # Detenemos la ejecución aquí
+        # 1. Intentamos recuperar los datos para que el usuario no empiece de cero
+        ref = qp.get("external_reference")
+        if ref:
+            data = desempaquetar_datos(ref)
+            if data:
+                # Restauramos el estado de la sesión para volver al Paso 2
+                st.session_state.step = 2
+                st.session_state.servicio_seleccionado = data['servicio']
+                # Reconstruimos la info del servicio necesaria para renderizar el paso 2
+                st.session_state.datos_servicio = {
+                    "servicio": data['servicio'],
+                    "precio_total": data['precio_total'],
+                    "abono": data['abono'],
+                    "pendiente": data['pendiente'],
+                    "duracion": data['duracion'],
+                    "descripcion": "Servicio seleccionado" # Texto genérico para no fallar
+                }
+                # Opcional: Podrías guardar nombre/mail en session_state aquí si quisieras pre-llenar
+
+        # 2. Mostramos el mensaje (pero NO detenemos la app)
+        st.error("⚠️ El proceso de pago no se completó.")
+        
+        # 3. Limpiamos los parámetros de la URL para que si recarga no salga el error de nuevo
+        # Nota: st.query_params.clear() en versiones recientes no recarga, 
+        # pero para asegurar que el usuario vea el formulario, simplemente dejamos que el código siga.
+        
+        # IMPORTANTE: No ponemos st.stop(). El código seguirá y renderizará el Paso 2 abajo.
 
     # --- CASO 2: PAGO EXITOSO ---
     elif status == "approved":
@@ -335,18 +356,12 @@ if "external_reference" in qp:
         if ref:
             data = desempaquetar_datos(ref)
             if data:
-                with st.spinner("Registrando reserva en calendario..."):
-                    # Intentamos guardar en Google Calendar
+                with st.spinner("Registrando reserva..."):
                     if agendar_evento_confirmado(data, pid):
                         st.balloons()
                         st.success("✅ ¡Reserva Asegurada!")
-                        
                         tel_ws = LINK_WHATSAPP.replace("https://wa.me/", "").replace("/", "")
-                        link_cambio_ui = generar_link_ws_dinamico(
-                            tel_ws, data['cliente'], 
-                            f"{data['fecha']} {data['hora']}", 
-                            data['servicio']
-                        )
+                        link_cambio_ui = generar_link_ws_dinamico(tel_ws, data['cliente'], f"{data['fecha']} {data['hora']}", data['servicio'])
 
                         with st.container(border=True):
                             st.markdown(f"""
@@ -366,7 +381,7 @@ if "external_reference" in qp:
                                     st.rerun()
                             with c2:
                                 st.link_button("🔄 Modificar (WhatsApp)", link_cambio_ui, type="secondary", use_container_width=True)
-                        st.stop()
-                    else: 
-                        st.error("Hubo un problema registrando la hora en el calendario, pero el pago fue exitoso. Por favor contacta al local.")
+                        st.stop() # Aquí SI paramos porque ya terminó el flujo
+                    else:
+                        st.error("Error al guardar en calendario. Tu pago está OK. Contacta al local.")
                         st.stop()
