@@ -1,20 +1,18 @@
 import streamlit as st
 import pandas as pd
 import mercadopago
-import uuid
+import json
+import base64
+import urllib.parse
 from datetime import datetime, timedelta, time
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 import pytz
 import re
-import json
-import base64
-import urllib.parse 
 
 # ==========================================
 # 🔧 ZONA DE CONFIGURACIÓN
 # ==========================================
-# ⚠️ TUS DATOS
 CALENDAR_ID = "emmanuelagherrera@gmail.com"
 CREDENTIALS_FILE = 'credentials.json'
 URL_SHEETS = "https://docs.google.com/spreadsheets/d/e/2PACX-1vSQsZwUWKZAbBMSbJoOAoZOS6ZqbBoFEYAoSOHBvV7amaOPPkXxEYnTnHAelBa-g_EzFibe6jDyvMuc/pub?output=csv"
@@ -42,19 +40,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ==========================================
-# 🧠 GESTIÓN DE ESTADO
-# ==========================================
-if 'step' not in st.session_state: st.session_state.step = 1
-if 'servicio_seleccionado' not in st.session_state: st.session_state.servicio_seleccionado = None
-if 'datos_servicio' not in st.session_state: st.session_state.datos_servicio = {}
-
-def resetear_proceso():
-    st.session_state.step = 1
-    st.session_state.servicio_seleccionado = None
-    st.session_state.datos_servicio = {}
-
-# ==========================================
-# 🧠 BACKEND Y UTILIDADES (Funciones necesarias para desempaquetar)
+# 🧠 FUNCIONES BACKEND
 # ==========================================
 def empaquetar_datos(datos):
     json_str = json.dumps(datos)
@@ -66,39 +52,6 @@ def desempaquetar_datos(token):
         return json.loads(json_str)
     except: return None
 
-# ==========================================
-# 🔄 LÓGICA DE RECUPERACIÓN (El parche para el botón "Volver")
-# ==========================================
-# Esta sección detecta si vienes de MP con status null/fallido y restaura tu sesión
-qp = st.query_params
-if "external_reference" in qp:
-    status_mp = str(qp.get("status")) # Convertimos a string para capturar "null"
-    
-    # SI EL USUARIO PRESIONÓ "VOLVER AL SITIO" (o falló el pago)
-    if status_mp == "null" or status_mp == "failure" or status_mp == "rejected":
-        ref = qp.get("external_reference")
-        data_recup = desempaquetar_datos(ref)
-        
-        if data_recup:
-            # Restauramos el estado para que aparezca en el Paso 2 (Formulario)
-            st.session_state.step = 2
-            st.session_state.servicio_seleccionado = data_recup['servicio']
-            # Reconstruimos el objeto datos_servicio
-            st.session_state.datos_servicio = {
-                "servicio": data_recup['servicio'],
-                "precio_total": data_recup['precio_total'],
-                "abono": data_recup['abono'],
-                "pendiente": data_recup['pendiente'],
-                "duracion": data_recup['duracion'],
-                "descripcion": "Servicio seleccionado" 
-            }
-            # Limpiamos la URL para evitar bucles y recargamos
-            st.query_params.clear()
-            st.rerun()
-
-# ==========================================
-# 🧠 RESTO DE FUNCIONES BACKEND
-# ==========================================
 def generar_link_ws_dinamico(telefono_local, nombre, fecha_hora, servicio):
     mensaje = f"Hola 👋, soy {nombre}. Tengo una reserva el {fecha_hora} para {servicio}. Necesito modificarla."
     mensaje_encoded = urllib.parse.quote(mensaje)
@@ -231,13 +184,14 @@ def generar_link_pago(datos_reserva):
         titulo_item = f"Reserva: {datos_reserva['servicio']}"
         email_cliente = datos_reserva['email'] if "@" in datos_reserva['email'] else "test@user.com"
 
-        # ⚠️ URL ACTUALIZADA
+        # ⚠️ URL BASE PURA
         url_base = "https://reserva-barberia-9jzeauyq6n2eaosbgz6xec.streamlit.app/"
 
         preference_data = {
             "items": [{"title": titulo_item, "quantity": 1, "unit_price": float(datos_reserva['abono']), "currency_id": "CLP"}],
             "payer": {"email": email_cliente},
             "external_reference": referencia,
+            # Le decimos a MP que vuelva a la URL base en todos los casos
             "back_urls": {
                 "success": url_base,
                 "failure": url_base,
@@ -256,46 +210,70 @@ def generar_link_pago(datos_reserva):
     except Exception as e: return None, str(e)
 
 # ==========================================
-# 🔄 EJECUCIÓN LÓGICA RETORNO (Éxito)
+# 🔄 LÓGICA DE RETORNO SIMPLIFICADA
 # ==========================================
-# Esta parte maneja SOLO el éxito (approved). El fallo ya se manejó arriba.
-if "status" in qp and qp["status"] == "approved":
-    ref = qp.get("external_reference")
-    pid = qp.get("payment_id")
-    if ref:
-        data = desempaquetar_datos(ref)
-        if data:
-            with st.spinner("Registrando reserva..."):
-                if agendar_evento_confirmado(data, pid):
-                    st.balloons()
-                    st.success("✅ ¡Reserva Asegurada!")
-                    tel_ws = LINK_WHATSAPP.replace("https://wa.me/", "").replace("/", "")
-                    link_cambio_ui = generar_link_ws_dinamico(tel_ws, data['cliente'], f"{data['fecha']} {data['hora']}", data['servicio'])
+# Capturamos los parámetros que envía MercadoPago al volver
+qp = st.query_params
 
-                    with st.container(border=True):
-                        st.markdown(f"""
-                        ### 🎫 Ticket de Atención
-                        * 🗓️ **Cuándo:** {data['fecha']} a las {data['hora']}
-                        * 💇 **Servicio:** {data['servicio']}
-                        * 💳 **Abono Pagado:** ${data['abono']:,}
-                        * 🏠 **Saldo Pendiente:** :red[**${data['pendiente']:,}**]
-                        ---
-                        ℹ️ **Importante:** Te enviamos una invitación a tu correo (**{data['email']}**). 
-                        """)
-                        
-                        c1, c2 = st.columns(2)
-                        with c1:
-                            if st.button("🏠 Inicio", use_container_width=True):
-                                st.query_params.clear()
-                                st.rerun()
-                        with c2:
-                            st.link_button("🔄 Modificar (WhatsApp)", link_cambio_ui, type="secondary", use_container_width=True)
-                    st.stop()
-                else: st.error("Error agendando. Contacta al local.")
-    st.stop()
+if "status" in qp or "collection_status" in qp:
+    status = qp.get("status")
+    
+    # CASO 1: PAGO APROBADO ✅
+    if status == "approved":
+        ref = qp.get("external_reference")
+        pid = qp.get("payment_id")
+        if ref:
+            data = desempaquetar_datos(ref)
+            if data:
+                with st.spinner("Registrando reserva..."):
+                    if agendar_evento_confirmado(data, pid):
+                        st.balloons()
+                        st.success("✅ ¡Reserva Asegurada!")
+                        tel_ws = LINK_WHATSAPP.replace("https://wa.me/", "").replace("/", "")
+                        link_cambio_ui = generar_link_ws_dinamico(tel_ws, data['cliente'], f"{data['fecha']} {data['hora']}", data['servicio'])
+
+                        with st.container(border=True):
+                            st.markdown(f"""
+                            ### 🎫 Ticket de Atención
+                            * 🗓️ **Cuándo:** {data['fecha']} a las {data['hora']}
+                            * 💇 **Servicio:** {data['servicio']}
+                            * 💳 **Abono Pagado:** ${data['abono']:,}
+                            * 🏠 **Saldo Pendiente:** :red[**${data['pendiente']:,}**]
+                            ---
+                            ℹ️ **Importante:** Te enviamos una invitación a tu correo (**{data['email']}**). 
+                            """)
+                            
+                            c1, c2 = st.columns(2)
+                            with c1:
+                                if st.button("🏠 Inicio", use_container_width=True):
+                                    st.query_params.clear()
+                                    st.rerun()
+                            with c2:
+                                st.link_button("🔄 Modificar (WhatsApp)", link_cambio_ui, type="secondary", use_container_width=True)
+                        st.stop()
+                    else: st.error("Error agendando. Contacta al local.")
+
+    # CASO 2: CUALQUIER OTRA COSA (Volver al sitio, Cancelado, Null)
+    # Si NO es approved, simplemente limpiamos la URL y recargamos.
+    # Esto logra el efecto de "ir a la URL base".
+    else:
+        st.query_params.clear() # Borra ?status=null&...
+        st.rerun()              # Recarga la app limpia
 
 # ==========================================
-# 🖥️ SIDEBAR
+# 🧠 GESTIÓN DE ESTADO (NORMAL)
+# ==========================================
+if 'step' not in st.session_state: st.session_state.step = 1
+if 'servicio_seleccionado' not in st.session_state: st.session_state.servicio_seleccionado = None
+if 'datos_servicio' not in st.session_state: st.session_state.datos_servicio = {}
+
+def resetear_proceso():
+    st.session_state.step = 1
+    st.session_state.servicio_seleccionado = None
+    st.session_state.datos_servicio = {}
+
+# ==========================================
+# 🖥️ SIDEBAR Y APP PRINCIPAL
 # ==========================================
 with st.sidebar:
     st.image("https://cdn-icons-png.flaticon.com/512/3504/3504100.png", width=60)
@@ -376,7 +354,6 @@ elif st.session_state.step == 2:
                     link, err = generar_link_pago(datos)
                     
                     if link:
-                        # 🚀 MAGIA DE REDIRECCIÓN
                         st.success("✅ Procesando... Redirigiendo a MercadoPago")
                         st.markdown(f'<meta http-equiv="refresh" content="0;url={link}">', unsafe_allow_html=True)
                         st.link_button("👉 Si no redirige autom., haz clic aquí", link, type="primary", use_container_width=True)
