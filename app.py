@@ -17,8 +17,8 @@ import time as time_lib # Agregar esta línea junto a tus otros imports
 # ==========================================
 # 1. Variables Fijas (Restauradas aquí porque no están en tus secrets)
 CALENDAR_ID = "emmanuelagherrera@gmail.com"
-#MP_ACCESS_TOKEN = "APP_USR-3110718966988352-120714-d3a0dd0e9831c38237e3450cea4fc5ef-3044196256"
-MP_ACCESS_TOKEN = "APP_USR-5048249550145195-121015-b85cabde7eee9312865dcd4522e7d872-3055893598"
+MP_ACCESS_TOKEN = "APP_USR-3110718966988352-120714-d3a0dd0e9831c38237e3450cea4fc5ef-3044196256"
+#MP_ACCESS_TOKEN = "APP_USR-5048249550145195-121015-b85cabde7eee9312865dcd4522e7d872-3055893598"
 
 # 2. Configuración Pública
 URL_SHEETS = "https://docs.google.com/spreadsheets/d/e/2PACX-1vSQsZwUWKZAbBMSbJoOAoZOS6ZqbBoFEYAoSOHBvV7amaOPPkXxEYnTnHAelBa-g_EzFibe6jDyvMuc/pub?output=csv"
@@ -180,7 +180,7 @@ def liberar_cupo(event_id):
     try: service.events().delete(calendarId=CALENDAR_ID, eventId=event_id).execute()
     except: pass
 
-def verificar_estado_manual(ref_codificada):
+#def verificar_estado_manual(ref_codificada):
     """Consulta a Mercado Pago con validación estricta."""
     if not ref_codificada: return False, None
     try:
@@ -205,7 +205,19 @@ def verificar_estado_manual(ref_codificada):
     except Exception as e:
         print(f"Error verificando pago: {e}") # Log interno para debug
         return False, None
-        
+ 
+def verificar_estado_manual(ref_codificada):
+    """
+    ⚠️ VERSIÓN TRUCADA PARA PRUEBAS
+    Simula que Mercado Pago siempre responde "SÍ" después de 5 segundos.
+    """
+    # Simulamos una pequeña espera para que parezca real
+    time_lib.sleep(1) 
+    
+    # ¡AQUÍ ESTÁ EL TRUCO! 
+    # En lugar de preguntar a Mercado Pago, devolvemos TRUE directamente.
+    print("🤖 SIMULANDO APROBACIÓN DE MERCADO PAGO...")
+    return True, "ID-PRUEBA-SIMULADA-123" 
         
 
 def sanitizar_input(texto):
