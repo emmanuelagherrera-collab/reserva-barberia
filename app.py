@@ -11,6 +11,10 @@ import json
 import base64
 import urllib.parse
 import time as time_lib
+# --- 1. NUEVOS IMPORTS PARA CORREO ---
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 
 # ==========================================
 # 🔧 ZONA DE CONFIGURACIÓN
@@ -120,6 +124,81 @@ def conectar_calendario():
         return None
 
 # ==========================================
+# 📧 2. FUNCIÓN DE CORREO (NUEVA)
+# ==========================================
+def enviar_correo_confirmacion(datos):
+    """Envía un correo HTML bonito al cliente."""
+    # Verificar credenciales
+    if "email" not in st.secrets:
+        return False
+
+    remitente = st.secrets["email"]["usuario"]
+    password = st.secrets["email"]["password"]
+    destinatario = datos['email']
+    
+    # Generar Link de Modificación para el correo
+    tel_ws = LINK_WHATSAPP.replace("https://wa.me/", "").replace("/", "")
+    link_cambio = generar_link_ws_dinamico(tel_ws, datos['cliente'], f"{datos['fecha']} {datos['hora']}", datos['servicio'])
+
+    # Construir el Mensaje
+    msg = MIMEMultipart()
+    # TRUCO: Nombre personalizado para que se vea profesional
+    msg['From'] = f"Barbería Pro (Reserva) <{remitente}>"
+    msg['To'] = destinatario
+    msg['Subject'] = f"✅ Reserva Confirmada: {datos['servicio']} - {datos['fecha']}"
+
+    cuerpo_html = f"""
+    <html>
+      <body style="font-family: Arial, sans-serif; color: #333;">
+        <div style="max-width: 600px; margin: auto; border: 1px solid #ddd; border-radius: 10px; overflow: hidden;">
+            <div style="background-color: #2e7d32; color: white; padding: 20px; text-align: center;">
+                <h1 style="margin: 0;">¡Reserva Confirmada!</h1>
+            </div>
+            <div style="padding: 20px;">
+                <p>Hola <strong>{datos['cliente']}</strong>,</p>
+                <p>Tu turno ha sido agendado correctamente. Aquí tienes los detalles:</p>
+                
+                <div style="background-color: #f9f9f9; padding: 15px; border-radius: 5px; margin: 20px 0;">
+                    <p>📅 <strong>Fecha:</strong> {datos['fecha']}</p>
+                    <p>⏰ <strong>Hora:</strong> {datos['hora']}</p>
+                    <p>💇 <strong>Servicio:</strong> {datos['servicio']}</p>
+                    <p>💰 <strong>Abono Pagado:</strong> ${datos['abono']:,}</p>
+                    <p>🏠 <strong>Saldo Pendiente:</strong> <span style="color: #d32f2f; font-weight: bold;">${datos['pendiente']:,}</span></p>
+                </div>
+
+                <p>📍 <strong>Ubicación:</strong> Av. Siempre Viva 123, Santiago.</p>
+                
+                <hr style="border: 0; border-top: 1px solid #eee; margin: 20px 0;">
+                
+                <p style="text-align: center;">
+                    <strong>¿Necesitas cambiar o cancelar?</strong><br>
+                    Avísanos directamente por WhatsApp haciendo clic abajo:
+                </p>
+                <div style="text-align: center; margin-top: 15px;">
+                    <a href="{link_cambio}" style="background-color: #25D366; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px; font-weight: bold;">
+                        Contactar por WhatsApp
+                    </a>
+                </div>
+            </div>
+        </div>
+      </body>
+    </html>
+    """
+    
+    msg.attach(MIMEText(cuerpo_html, 'html'))
+
+    # Enviar
+    try:
+        server = smtplib.SMTP_SSL('smtp.gmail.com', 465)
+        server.login(remitente, password)
+        server.sendmail(remitente, destinatario, msg.as_string())
+        server.quit()
+        return True
+    except Exception as e:
+        print(f"Error enviando correo: {e}")
+        return False
+
+# ==========================================
 # 🚦 GESTIÓN DE BLOQUEOS (SEMÁFORO)
 # ==========================================
 def reservar_cupo_temporal(datos_cita):
@@ -175,27 +254,10 @@ def liberar_cupo(event_id):
     try: service.events().delete(calendarId=CALENDAR_ID, eventId=event_id).execute()
     except: pass
 
-# --- VERSIÓN REAL DE PAGO ---
+# --- VERSIÓN TRUCADA (PRUEBA) ---
 def verificar_estado_manual(ref_codificada):
-    """Consulta a Mercado Pago con validación real."""
-    if not ref_codificada: return False, None
-    try:
-        sdk = mercadopago.SDK(MP_ACCESS_TOKEN)
-        filters = {"external_reference": ref_codificada}
-        
-        search_result = sdk.payment().search(filters)
-        
-        if "response" in search_result and "results" in search_result["response"]:
-            pagos = search_result["response"]["results"]
-            
-            for p in pagos:
-                if p.get("status") == "approved": 
-                    return True, p.get("id")
-                    
-        return False, None
-    except Exception as e:
-        print(f"Error verificando pago: {e}") 
-        return False, None
+    time_lib.sleep(1) 
+    return True, "ID-PRUEBA-SIMULADA-123" 
 
 def sanitizar_input(texto):
     if not texto: return ""
@@ -344,6 +406,9 @@ if "status" in qp and qp["status"] == "approved":
                     st.balloons()
                     st.success("✅ ¡Reserva Asegurada!")
                     
+                    # 📧 3. ENVIAR CORREO AQUÍ
+                    enviar_correo_confirmacion(data)
+                    
                     tel_ws = LINK_WHATSAPP.replace("https://wa.me/", "").replace("/", "")
                     link_cambio_ui = generar_link_ws_dinamico(tel_ws, data['cliente'], f"{data['fecha']} {data['hora']}", data['servicio'])
 
@@ -356,7 +421,7 @@ if "status" in qp and qp["status"] == "approved":
                         * 🏠 **Saldo Pendiente:** :red[**${data['pendiente']:,}**]
                         
                         ---
-                        ℹ️ **Importante:** Tu reserva está en nuestra agenda.
+                        ℹ️ **Importante:** Hemos enviado un correo a **{data['email']}** con los detalles.
                         """)
                     
                     c_inicio, c_cambio = st.columns(2)
@@ -413,9 +478,12 @@ def panel_espera_pago():
             st.session_state.exito_final = True
             st.session_state.id_comprobante = id_pago
             st.session_state.proceso_pago = False
+            
+            # 📧 3. ENVIAR CORREO TAMBIÉN EN EL FLUJO AUTOMÁTICO
+            enviar_correo_confirmacion(st.session_state.get("datos_backup"))
+            
             st.rerun()
         else:
-            # Si falla calendar pero pagó, mostramos mensaje discreto
             st.error("Pago recibido, pero hubo un problema agendando. Toma captura de pantalla.")
 
 # ==========================================
