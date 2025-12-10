@@ -168,10 +168,12 @@ def confirmar_cupo_final(event_id, datos_cita, id_pago):
         'colorId': '11', # Color Rojo (Tomato)
         'attendees': [{'email': datos_cita['email']}]
     }
-    try:
+try:
         service.events().patch(calendarId=CALENDAR_ID, eventId=event_id, body=evento_update, sendUpdates='all').execute()
         return True
-    except: return False
+    except Exception as e:
+        st.error(f"⚠️ ERROR REAL DE GOOGLE: {e}") # Así sabremos si es 403, 404 o 400
+        return False
 
 def liberar_cupo(event_id):
     """Borra el evento temporal si se acaba el tiempo o cancelan."""
