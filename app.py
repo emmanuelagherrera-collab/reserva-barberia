@@ -129,7 +129,9 @@ def conectar_calendario():
 def reservar_cupo_temporal(datos_cita):
     """Crea un evento PROVISORIO (Gris) para bloquear el horario."""
     service = conectar_calendario()
-    if not service: return None
+    if not service: 
+        st.error("Error: No se pudo conectar al calendario (Credenciales inválidas).")
+        return None
     
     fecha = datetime.strptime(datos_cita['fecha'], "%Y-%m-%d").date()
     h, m = map(int, datos_cita['hora'].split(":"))
@@ -140,12 +142,15 @@ def reservar_cupo_temporal(datos_cita):
         'summary': f"⏳ RESERVANDO - {datos_cita['cliente']}",
         'description': f"Esperando pago... (El cupo expira en 5 min)",
         'start': {'dateTime': dt_ini.isoformat()}, 'end': {'dateTime': dt_fin.isoformat()},
-        'colorId': '8' # Color Gris (Grafito)
+        'colorId': '8'
     }
     try: 
         ev = service.events().insert(calendarId=CALENDAR_ID, body=evento).execute()
-        return ev['id'] # Retornamos el ID para poder borrarlo o confirmarlo luego
-    except: return None
+        return ev['id']
+    except Exception as e:
+        # AQUÍ ESTÁ EL CAMBIO: Mostramos el error exacto en pantalla
+        st.error(f"❌ ERROR DE GOOGLE CALENDAR: {e}")
+        return None
 
 def confirmar_cupo_final(event_id, datos_cita, id_pago):
     """Transforma el evento temporal en uno CONFIRMADO (Rojo)."""
