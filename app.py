@@ -222,6 +222,54 @@ def validar_datos(nombre, email, telefono):
 def obtener_bloques_disponibles(fecha, duracion):
     service = conectar_calendario()
     if not service: return []
+    
+    # 1. Traemos los eventos de Google Calendar (Igual que antes)
+    inicio_dia = datetime.combine(fecha, time.min)
+    fin_dia = datetime.combine(fecha, time.max)
+    inicio_utc = ZONA_HORARIA.localize(inicio_dia).astimezone(pytz.UTC).isoformat()
+    fin_utc = ZONA_HORARIA.localize(fin_dia).astimezone(pytz.UTC).isoformat()
+    
+    events_result = service.events().list(calendarId=CALENDAR_ID, timeMin=inicio_utc, timeMax=fin_utc, singleEvents=True).execute()
+    events = events_result.get('items', [])
+    
+    # 2. Configuración de Horario Laboral
+    hora_act = ZONA_HORARIA.localize(datetime.combine(fecha, time(10, 0))) # Abre a las 10:00
+    hora_fin = ZONA_HORARIA.localize(datetime.combine(fecha, time(20, 0))) # Cierra a las 20:00
+    
+    # 3. LÓGICA NUEVA: Margen de Seguridad
+    ahora = datetime.now(ZONA_HORARIA)
+    # Definimos cuánto tiempo antes debe reservar (Ej: 60 min para alcanzar a llegar)
+    margen_minimo = timedelta(minutes=60) 
+    
+    bloques = []
+    while hora_act + timedelta(minutes=duracion) <= hora_fin:
+        fin_cand = hora_act + timedelta(minutes=duracion)
+        
+        # --- FILTRO 1: TIEMPO REAL ---
+        # Si la fecha es hoy, verificamos que el bloque no sea pasado ni muy pronto
+        if fecha == ahora.date():
+            if hora_act < (ahora + margen_minimo):
+                # Si el bloque es a las 13:00 y son las 12:56, saltamos porque no alcanza a llegar
+                hora_act += timedelta(minutes=30)
+                continue
+
+        # --- FILTRO 2: CHOQUES CALENDARIO ---
+        choque = False
+        for ev in events:
+            start = ev['start'].get('dateTime'); end = ev['end'].get('dateTime')
+            if not start: continue
+            ev_start = datetime.fromisoformat(start).astimezone(ZONA_HORARIA)
+            ev_end = datetime.fromisoformat(end).astimezone(ZONA_HORARIA)
+            
+            if (hora_act < ev_end) and (fin_cand > ev_start):
+                choque = True; break
+        
+        if not choque: bloques.append(hora_act.strftime("%H:%M"))
+        hora_act += timedelta(minutes=30)
+        
+    return bloques
+    service = conectar_calendario()
+    if not service: return []
     inicio_dia = datetime.combine(fecha, time.min)
     fin_dia = datetime.combine(fecha, time.max)
     inicio_utc = ZONA_HORARIA.localize(inicio_dia).astimezone(pytz.UTC).isoformat()
