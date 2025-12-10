@@ -180,15 +180,30 @@ def liberar_cupo(event_id):
     except: pass
 
 def verificar_estado_manual(ref_codificada):
-    """Consulta directa a Mercado Pago para ver si pagaron."""
+    """Consulta a Mercado Pago con validación estricta."""
+    if not ref_codificada: return False, None
     try:
         sdk = mercadopago.SDK(MP_ACCESS_TOKEN)
+        # Filtros de búsqueda exactos
         filters = {"external_reference": ref_codificada}
-        pagos = sdk.payment().search(filters)["response"]["results"]
-        for p in pagos:
-            if p["status"] == "approved": return True, p["id"]
+        
+        # Búsqueda en la API
+        search_result = sdk.payment().search(filters)
+        
+        # Validación de estructura de respuesta
+        if "response" in search_result and "results" in search_result["response"]:
+            pagos = search_result["response"]["results"]
+            
+            # Recorremos los pagos encontrados (puede haber intentos fallidos previos)
+            for p in pagos:
+                # SOLO retornamos True si está APROBADO explícitamente
+                if p.get("status") == "approved": 
+                    return True, p.get("id")
+                    
         return False, None
-    except: return False, None
+    except Exception as e:
+        print(f"Error verificando pago: {e}") # Log interno para debug
+        return False, None
         
         
 
@@ -354,47 +369,52 @@ if "status" in qp and qp["status"] == "approved":
     st.stop()
 
 # ==========================================
-# 🤖 SONDEO AUTOMÁTICO (FRAGMENT)
+# 🤖 SONDEO AUTOMÁTICO (MINIMALISTA)
 # ==========================================
 @st.fragment(run_every=5)
 def panel_espera_pago():
-    """Este bloque se actualiza solo cada 5 segundos sin recargar toda la página."""
+    """Revisa el pago en segundo plano sin barras de carga invasivas."""
     if not st.session_state.get("proceso_pago"): return
 
-    # 1. Chequeo de tiempo (Semáforo)
+    # 1. Chequeo de tiempo
     start = st.session_state.get("start_time_pago")
     if not start: return
     
-    segundos_transcurridos = (datetime.now() - start).total_seconds()
-    limite = 300 # 5 minutos
-    tiempo_restante = int(limite - segundos_transcurridos)
+    segundos = (datetime.now() - start).total_seconds()
+    limite = 300 # 5 min
+    restante = int(limite - segundos)
+    
+    # Contenedor para mensajes dinámicos (sin recargar todo)
+    status_container = st.empty()
     
     # CASO A: Se acabó el tiempo
-    if tiempo_restante <= 0:
-        st.error("⏳ Tiempo agotado. El cupo ha sido liberado.")
+    if restante <= 0:
+        status_container.error("⏳ Tiempo de reserva agotado.")
         liberar_cupo(st.session_state.get("event_id_temp"))
-        time_lib.sleep(3)
-        # Reseteamos variables manuales
+        time_lib.sleep(2)
         st.session_state.proceso_pago = False
         st.rerun()
         return
 
-    # 2. Barra de progreso visual
-    progreso = min(segundos_transcurridos / limite, 1.0)
-    st.progress(progreso, text=f"⏳ Esperando confirmación del banco... Tienes {tiempo_restante}s para completar.")
+    # CASO B: Consulta Silenciosa
+    # Mostramos mensaje discreto
+    mins = restante // 60
+    secs = restante % 60
+    status_container.caption(f"⏳ Tu cupo está reservado. Esperando confirmación del banco... ({mins}:{secs:02d})")
     
-    # 3. Consulta Silenciosa a Mercado Pago
+    # Consultamos a MP
     pagado, id_pago = verificar_estado_manual(st.session_state.get("ref_pago"))
     
-    # CASO B: ¡Pagaron!
     if pagado:
-        st.success("✅ ¡Pago detectado!")
-        # Confirmamos el evento gris y lo volvemos rojo
+        # Limpiamos el mensaje de espera
+        status_container.empty()
+        
+        # Confirmamos
         if confirmar_cupo_final(st.session_state.get("event_id_temp"), st.session_state.get("datos_backup"), id_pago):
             st.session_state.exito_final = True
             st.session_state.id_comprobante = id_pago
-            st.session_state.proceso_pago = False # Detenemos el loop
-            st.rerun() # Recargamos para mostrar el ticket
+            st.session_state.proceso_pago = False
+            st.rerun()
 
 # ==========================================
 # 🖥️ SIDEBAR
