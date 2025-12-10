@@ -17,7 +17,8 @@ import time as time_lib # Agregar esta línea junto a tus otros imports
 # ==========================================
 # 1. Variables Fijas (Restauradas aquí porque no están en tus secrets)
 CALENDAR_ID = "emmanuelagherrera@gmail.com"
-MP_ACCESS_TOKEN = "APP_USR-3110718966988352-120714-d3a0dd0e9831c38237e3450cea4fc5ef-3044196256"
+#MP_ACCESS_TOKEN = "APP_USR-3110718966988352-120714-d3a0dd0e9831c38237e3450cea4fc5ef-3044196256"
+MP_ACCESS_TOKEN = "APP_USR-5048249550145195-121015-b85cabde7eee9312865dcd4522e7d872-3055893598"
 
 # 2. Configuración Pública
 URL_SHEETS = "https://docs.google.com/spreadsheets/d/e/2PACX-1vSQsZwUWKZAbBMSbJoOAoZOS6ZqbBoFEYAoSOHBvV7amaOPPkXxEYnTnHAelBa-g_EzFibe6jDyvMuc/pub?output=csv"
