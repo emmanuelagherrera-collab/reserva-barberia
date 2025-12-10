@@ -407,7 +407,7 @@ if "status" in qp and qp["status"] == "approved":
 # 🤖 SONDEO AUTOMÁTICO (MINIMALISTA)
 # ==========================================
 @st.fragment(run_every=5)
-#def panel_espera_pago():
+def panel_espera_pago():
     """Revisa el pago en segundo plano sin barras de carga invasivas."""
     if not st.session_state.get("proceso_pago"): return
 
