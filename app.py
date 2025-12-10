@@ -407,7 +407,7 @@ if "status" in qp and qp["status"] == "approved":
 # 🤖 SONDEO AUTOMÁTICO (MINIMALISTA)
 # ==========================================
 @st.fragment(run_every=5)
-def panel_espera_pago():
+#def panel_espera_pago():
     """Revisa el pago en segundo plano sin barras de carga invasivas."""
     if not st.session_state.get("proceso_pago"): return
 
@@ -450,6 +450,65 @@ def panel_espera_pago():
             st.session_state.id_comprobante = id_pago
             st.session_state.proceso_pago = False
             st.rerun()
+
+# ==========================================
+# 🕵️ SONDEO AUTOMÁTICO (MODO DIAGNÓSTICO)
+# ==========================================
+@st.fragment(run_every=5)
+def panel_espera_pago():
+    if not st.session_state.get("proceso_pago"): return
+
+    # 1. Chequeo de tiempo
+    start = st.session_state.get("start_time_pago")
+    if not start: return
+    
+    segundos = (datetime.now() - start).total_seconds()
+    limite = 300 
+    restante = int(limite - segundos)
+    
+    status_container = st.empty()
+    debug_container = st.empty() # <--- Nuevo contenedor para ver qué pasa
+    
+    # CASO A: Se acabó el tiempo
+    if restante <= 0:
+        status_container.error("⏳ Tiempo agotado.")
+        liberar_cupo(st.session_state.get("event_id_temp"))
+        time_lib.sleep(2)
+        st.session_state.proceso_pago = False
+        st.rerun()
+        return
+
+    # CASO B: Consulta
+    mins = restante // 60
+    secs = restante % 60
+    status_container.info(f"⏳ Esperando... ({mins}:{secs:02d})")
+    
+    # --- DIAGNÓSTICO EN VIVO ---
+    debug_container.write("🔍 1. Consultando estado del pago...")
+    
+    # Consultamos (Debería ser la función trucada que devuelve True)
+    pagado, id_pago = verificar_estado_manual(st.session_state.get("ref_pago"))
+    
+    debug_container.write(f"🔍 2. Respuesta recibida: Pagado={pagado}, ID={id_pago}")
+    
+    if pagado:
+        debug_container.write("🔍 3. ¡Pago detectado! Intentando escribir en Google Calendar...")
+        
+        # Intentamos confirmar
+        event_id = st.session_state.get("event_id_temp")
+        debug_container.write(f"🔍 4. ID del evento a modificar: {event_id}")
+        
+        exito_calendar = confirmar_cupo_final(event_id, st.session_state.get("datos_backup"), id_pago)
+        
+        debug_container.write(f"🔍 5. ¿Google Calendar aceptó el cambio?: {exito_calendar}")
+        
+        if exito_calendar:
+            st.session_state.exito_final = True
+            st.session_state.id_comprobante = id_pago
+            st.session_state.proceso_pago = False
+            st.rerun()
+        else:
+            st.error("❌ ERROR CRÍTICO: El pago fue aprobado, pero falló la escritura en Google Calendar. Revisa los permisos del robot.")
 
 # ==========================================
 # 🖥️ SIDEBAR
