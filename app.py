@@ -123,7 +123,7 @@ def conectar_calendario():
 # 🚦 GESTIÓN DE BLOQUEOS (SEMÁFORO)
 # ==========================================
 def reservar_cupo_temporal(datos_cita):
-    """Crea un evento PROVISORIO (Gris) para bloquear el horario en TU calendario."""
+    """Crea un evento PROVISORIO (Gris) para bloquear el horario."""
     service = conectar_calendario()
     if not service: 
         st.error("Error: No se pudo conectar al calendario.")
@@ -144,11 +144,13 @@ def reservar_cupo_temporal(datos_cita):
         ev = service.events().insert(calendarId=CALENDAR_ID, body=evento).execute()
         return ev['id']
     except Exception as e:
-        st.error(f"❌ ERROR DE GOOGLE CALENDAR: {e}")
+        # Mensaje simple si falla
+        st.error("Lo sentimos, no pudimos bloquear el horario. Intente nuevamente.")
+        print(f"DEBUG Error Calendar: {e}")
         return None
 
 def confirmar_cupo_final(event_id, datos_cita, id_pago):
-    """Transforma el evento temporal en uno CONFIRMADO (Rojo) en TU calendario."""
+    """Transforma el evento temporal en uno CONFIRMADO (Rojo)."""
     service = conectar_calendario()
     if not service: return False
     
@@ -159,13 +161,12 @@ def confirmar_cupo_final(event_id, datos_cita, id_pago):
         'summary': f"✅ {datos_cita['cliente']} - {datos_cita['servicio']}",
         'description': f"""ESTADO: CONFIRMADO\n💰 Abono: ${datos_cita['abono']:,} (ID: {id_pago})\n⚠️ Pendiente: ${datos_cita['pendiente']:,}\n\nPara cambios: {link_cambio}\nTel: {datos_cita['tel']}\nEmail: {datos_cita['email']}""",
         'colorId': '11'
-        # ❌ ELIMINADO: 'attendees' para evitar que Google bloquee la edición.
     }
     try:
         service.events().patch(calendarId=CALENDAR_ID, eventId=event_id, body=evento_update).execute()
         return True
     except Exception as e:
-        st.error(f"⚠️ ERROR REAL DE GOOGLE: {e}") 
+        print(f"DEBUG Error Confirmar: {e}")
         return False
 
 def liberar_cupo(event_id):
@@ -180,7 +181,7 @@ def verificar_estado_manual(ref_codificada):
     ⚠️ VERSIÓN TRUCADA PARA PRUEBAS
     """
     time_lib.sleep(1) 
-    print("🤖 SIMULANDO APROBACIÓN DE MERCADO PAGO...")
+    # Para producción, aquí iría la llamada real a Mercado Pago SDK
     return True, "ID-PRUEBA-SIMULADA-123" 
 
 def sanitizar_input(texto):
@@ -241,7 +242,6 @@ def obtener_bloques_disponibles(fecha, duracion):
     return bloques
 
 def agendar_evento_confirmado(datos_cita, id_pago):
-    # Esta función se usa en el retorno de Mercado Pago
     service = conectar_calendario()
     fecha = datetime.strptime(datos_cita['fecha'], "%Y-%m-%d").date()
     h, m = map(int, datos_cita['hora'].split(":"))
@@ -272,7 +272,6 @@ def agendar_evento_confirmado(datos_cita, id_pago):
         Tel: {datos_cita['tel']}
         Email: {datos_cita['email']}
         """,
-        # ❌ ELIMINADO: 'attendees' removido aquí también.
         'start': {'dateTime': dt_ini.isoformat()}, 'end': {'dateTime': dt_fin.isoformat()},
         'colorId': '11'
     }
@@ -360,7 +359,7 @@ if "status" in qp and qp["status"] == "approved":
     st.stop()
 
 # ==========================================
-# 🕵️ SONDEO AUTOMÁTICO (MODO DIAGNÓSTICO)
+# 🤖 SONDEO AUTOMÁTICO (MINIMALISTA)
 # ==========================================
 @st.fragment(run_every=5)
 def panel_espera_pago():
@@ -375,7 +374,6 @@ def panel_espera_pago():
     restante = int(limite - segundos)
     
     status_container = st.empty()
-    debug_container = st.empty() 
     
     # CASO A: Se acabó el tiempo
     if restante <= 0:
@@ -386,29 +384,17 @@ def panel_espera_pago():
         st.rerun()
         return
 
-    # CASO B: Consulta
+    # CASO B: Consulta Silenciosa
     mins = restante // 60
     secs = restante % 60
-    status_container.info(f"⏳ Esperando... ({mins}:{secs:02d})")
-    
-    # --- DIAGNÓSTICO EN VIVO ---
-    debug_container.write("🔍 1. Consultando estado del pago...")
+    status_container.info(f"⏳ Esperando pago... ({mins}:{secs:02d})")
     
     # Consultamos
     pagado, id_pago = verificar_estado_manual(st.session_state.get("ref_pago"))
     
-    debug_container.write(f"🔍 2. Respuesta recibida: Pagado={pagado}, ID={id_pago}")
-    
     if pagado:
-        debug_container.write("🔍 3. ¡Pago detectado! Intentando escribir en Google Calendar...")
-        
         # Intentamos confirmar
-        event_id = st.session_state.get("event_id_temp")
-        debug_container.write(f"🔍 4. ID del evento a modificar: {event_id}")
-        
-        exito_calendar = confirmar_cupo_final(event_id, st.session_state.get("datos_backup"), id_pago)
-        
-        debug_container.write(f"🔍 5. ¿Google Calendar aceptó el cambio?: {exito_calendar}")
+        exito_calendar = confirmar_cupo_final(st.session_state.get("event_id_temp"), st.session_state.get("datos_backup"), id_pago)
         
         if exito_calendar:
             st.session_state.exito_final = True
@@ -416,7 +402,8 @@ def panel_espera_pago():
             st.session_state.proceso_pago = False
             st.rerun()
         else:
-            st.error("❌ ERROR CRÍTICO: El pago fue aprobado, pero falló la escritura en Google Calendar. Revisa los permisos del robot.")
+            # Si falla calendar pero pagó, mostramos mensaje discreto
+            st.error("Pago recibido, pero hubo un problema agendando. Toma captura de pantalla.")
 
 # ==========================================
 # 🖥️ SIDEBAR
@@ -544,7 +531,7 @@ elif st.session_state.step == 2:
                                     liberar_cupo(ev_id) 
                                     st.error("Error conectando con el banco.")
                             else:
-                                st.error("No se pudo bloquear el horario. Intente otro.")
+                                pass # El error ya se mostró en la función
                     else:
                         st.error(msg or "Selecciona una hora.")
 
