@@ -168,7 +168,7 @@ def confirmar_cupo_final(event_id, datos_cita, id_pago):
         'colorId': '11', # Color Rojo (Tomato)
         'attendees': [{'email': datos_cita['email']}]
     }
-try:
+    try:
         service.events().patch(calendarId=CALENDAR_ID, eventId=event_id, body=evento_update, sendUpdates='all').execute()
         return True
     except Exception as e:
