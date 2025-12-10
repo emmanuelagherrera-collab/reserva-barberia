@@ -144,7 +144,6 @@ def reservar_cupo_temporal(datos_cita):
         ev = service.events().insert(calendarId=CALENDAR_ID, body=evento).execute()
         return ev['id']
     except Exception as e:
-        # Mensaje simple si falla
         st.error("Lo sentimos, no pudimos bloquear el horario. Intente nuevamente.")
         print(f"DEBUG Error Calendar: {e}")
         return None
@@ -176,13 +175,27 @@ def liberar_cupo(event_id):
     try: service.events().delete(calendarId=CALENDAR_ID, eventId=event_id).execute()
     except: pass
 
+# --- VERSIÓN REAL DE PAGO ---
 def verificar_estado_manual(ref_codificada):
-    """
-    ⚠️ VERSIÓN TRUCADA PARA PRUEBAS
-    """
-    time_lib.sleep(1) 
-    # Para producción, aquí iría la llamada real a Mercado Pago SDK
-    return True, "ID-PRUEBA-SIMULADA-123" 
+    """Consulta a Mercado Pago con validación real."""
+    if not ref_codificada: return False, None
+    try:
+        sdk = mercadopago.SDK(MP_ACCESS_TOKEN)
+        filters = {"external_reference": ref_codificada}
+        
+        search_result = sdk.payment().search(filters)
+        
+        if "response" in search_result and "results" in search_result["response"]:
+            pagos = search_result["response"]["results"]
+            
+            for p in pagos:
+                if p.get("status") == "approved": 
+                    return True, p.get("id")
+                    
+        return False, None
+    except Exception as e:
+        print(f"Error verificando pago: {e}") 
+        return False, None
 
 def sanitizar_input(texto):
     if not texto: return ""
@@ -531,7 +544,7 @@ elif st.session_state.step == 2:
                                     liberar_cupo(ev_id) 
                                     st.error("Error conectando con el banco.")
                             else:
-                                pass # El error ya se mostró en la función
+                                pass
                     else:
                         st.error(msg or "Selecciona una hora.")
 
