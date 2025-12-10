@@ -10,6 +10,7 @@ import re
 import json
 import base64
 import urllib.parse 
+import time as time_lib # Agregar esta línea junto a tus otros imports
 
 # ==========================================
 # 🔧 ZONA DE CONFIGURACIÓN
@@ -121,6 +122,70 @@ def conectar_calendario():
     except Exception as e:
         print(f"Error conectando al calendario: {e}")
         return None
+        
+# ==========================================
+# 🚦 GESTIÓN DE BLOQUEOS (SEMÁFORO)
+# ==========================================
+def reservar_cupo_temporal(datos_cita):
+    """Crea un evento PROVISORIO (Gris) para bloquear el horario."""
+    service = conectar_calendario()
+    if not service: return None
+    
+    fecha = datetime.strptime(datos_cita['fecha'], "%Y-%m-%d").date()
+    h, m = map(int, datos_cita['hora'].split(":"))
+    dt_ini = ZONA_HORARIA.localize(datetime.combine(fecha, time(h, m)))
+    dt_fin = dt_ini + timedelta(minutes=datos_cita['duracion'])
+    
+    evento = {
+        'summary': f"⏳ RESERVANDO - {datos_cita['cliente']}",
+        'description': f"Esperando pago... (El cupo expira en 5 min)",
+        'start': {'dateTime': dt_ini.isoformat()}, 'end': {'dateTime': dt_fin.isoformat()},
+        'colorId': '8' # Color Gris (Grafito)
+    }
+    try: 
+        ev = service.events().insert(calendarId=CALENDAR_ID, body=evento).execute()
+        return ev['id'] # Retornamos el ID para poder borrarlo o confirmarlo luego
+    except: return None
+
+def confirmar_cupo_final(event_id, datos_cita, id_pago):
+    """Transforma el evento temporal en uno CONFIRMADO (Rojo)."""
+    service = conectar_calendario()
+    if not service: return False
+    
+    # Generamos el link de WhatsApp
+    tel_ws = LINK_WHATSAPP.replace("https://wa.me/", "").replace("/", "")
+    link_cambio = generar_link_ws_dinamico(tel_ws, datos_cita['cliente'], f"{datos_cita['fecha']} {datos_cita['hora']}", datos_cita['servicio'])
+    
+    evento_update = {
+        'summary': f"✅ {datos_cita['cliente']} - {datos_cita['servicio']}",
+        'description': f"""ESTADO: CONFIRMADO\n💰 Abono: ${datos_cita['abono']:,} (ID: {id_pago})\n⚠️ Pendiente: ${datos_cita['pendiente']:,}\n\nPara cambios: {link_cambio}\nTel: {datos_cita['tel']}\nEmail: {datos_cita['email']}""",
+        'colorId': '11', # Color Rojo (Tomato)
+        'attendees': [{'email': datos_cita['email']}]
+    }
+    try:
+        service.events().patch(calendarId=CALENDAR_ID, eventId=event_id, body=evento_update, sendUpdates='all').execute()
+        return True
+    except: return False
+
+def liberar_cupo(event_id):
+    """Borra el evento temporal si se acaba el tiempo o cancelan."""
+    service = conectar_calendario()
+    if not service or not event_id: return
+    try: service.events().delete(calendarId=CALENDAR_ID, eventId=event_id).execute()
+    except: pass
+
+def verificar_estado_manual(ref_codificada):
+    """Consulta directa a Mercado Pago para ver si pagaron."""
+    try:
+        sdk = mercadopago.SDK(MP_ACCESS_TOKEN)
+        filters = {"external_reference": ref_codificada}
+        pagos = sdk.payment().search(filters)["response"]["results"]
+        for p in pagos:
+            if p["status"] == "approved": return True, p["id"]
+        return False, None
+    except: return False, None
+        
+        
 
 def sanitizar_input(texto):
     if not texto: return ""
@@ -284,47 +349,47 @@ if "status" in qp and qp["status"] == "approved":
     st.stop()
 
 # ==========================================
-# 🔄 LÓGICA DE RETORNO (Cierre del Ciclo)
+# 🤖 SONDEO AUTOMÁTICO (FRAGMENT)
 # ==========================================
-# Esto revisa la URL al cargar la página para ver si volvimos de pagar
-qp = st.query_params
+@st.fragment(run_every=5)
+def panel_espera_pago():
+    """Este bloque se actualiza solo cada 5 segundos sin recargar toda la página."""
+    if not st.session_state.get("proceso_pago"): return
 
-if "status" in qp and qp["status"] == "approved":
-    # 1. Recuperamos los datos ocultos en la referencia
-    ref_code = qp.get("external_reference")
-    payment_id = qp.get("payment_id")
+    # 1. Chequeo de tiempo (Semáforo)
+    start = st.session_state.get("start_time_pago")
+    if not start: return
     
-    if ref_code:
-        datos_recuperados = desempaquetar_datos(ref_code)
-        
-        if datos_recuperados:
-            with st.spinner("Pago validado. Finalizando reserva..."):
-                # 2. Llamamos a la función que SÍ agenda en Google Calendar
-                exito = agendar_evento_confirmado(datos_recuperados, payment_id)
-                
-                if exito:
-                    st.balloons() # 🎉
-                    st.success("✅ ¡PAGO EXITOSO Y CITA AGENDADA!")
-                    
-                    # 3. Mostramos el Ticket Final
-                    st.info(f"""
-                    **TICKET DE CONFIRMACIÓN**
-                    * 🗓️ **Fecha:** {datos_recuperados['fecha']}
-                    * 🕒 **Hora:** {datos_recuperados['hora']}
-                    * 💇‍♀️ **Servicio:** {datos_recuperados['servicio']}
-                    * 👤 **Cliente:** {datos_recuperados['cliente']}
-                    * 🆔 **Comprobante MP:** {payment_id}
-                    """)
-                    
-                    # Botón para limpiar la URL y volver al inicio
-                    if st.button("Volver al Inicio"): 
-                        st.query_params.clear()
-                        resetear_proceso() # Usamos tu función de reset
-                        st.rerun()
-                        
-                    st.stop() # Detenemos aquí para que no muestre el resto del formulario
-                else:
-                    st.error("El pago llegó, pero hubo un error guardando en el calendario.")
+    segundos_transcurridos = (datetime.now() - start).total_seconds()
+    limite = 300 # 5 minutos
+    tiempo_restante = int(limite - segundos_transcurridos)
+    
+    # CASO A: Se acabó el tiempo
+    if tiempo_restante <= 0:
+        st.error("⏳ Tiempo agotado. El cupo ha sido liberado.")
+        liberar_cupo(st.session_state.get("event_id_temp"))
+        time_lib.sleep(3)
+        # Reseteamos variables manuales
+        st.session_state.proceso_pago = False
+        st.rerun()
+        return
+
+    # 2. Barra de progreso visual
+    progreso = min(segundos_transcurridos / limite, 1.0)
+    st.progress(progreso, text=f"⏳ Esperando confirmación del banco... Tienes {tiempo_restante}s para completar.")
+    
+    # 3. Consulta Silenciosa a Mercado Pago
+    pagado, id_pago = verificar_estado_manual(st.session_state.get("ref_pago"))
+    
+    # CASO B: ¡Pagaron!
+    if pagado:
+        st.success("✅ ¡Pago detectado!")
+        # Confirmamos el evento gris y lo volvemos rojo
+        if confirmar_cupo_final(st.session_state.get("event_id_temp"), st.session_state.get("datos_backup"), id_pago):
+            st.session_state.exito_final = True
+            st.session_state.id_comprobante = id_pago
+            st.session_state.proceso_pago = False # Detenemos el loop
+            st.rerun() # Recargamos para mostrar el ticket
 
 # ==========================================
 # 🖥️ SIDEBAR
@@ -385,55 +450,96 @@ if st.session_state.step == 1:
 
 elif st.session_state.step == 2:
     svc = st.session_state.datos_servicio
-    st.info(f"""
-    Estás reservando: **{st.session_state.servicio_seleccionado}**
-    * Total: ${svc['precio_total']:,}
-    * **A pagar ahora: ${svc['abono']:,}**
-    * Pendiente: ${svc['pendiente']:,}
-    """)
     
-    col_cal, col_dat = st.columns([1, 1])
-    
-    with col_cal:
-        st.subheader("1. Fecha y Hora")
-        hoy = datetime.now(ZONA_HORARIA).date()
-        fecha = st.date_input("Día", min_value=hoy, max_value=hoy+timedelta(days=30))
-        
-        bloques = []
-        if fecha:
-            with st.spinner("Buscando horas..."):
-                bloques = obtener_bloques_disponibles(fecha, svc['duracion'])
-            
-            if not bloques:
-                st.error("Sin horas.")
-                hora = None
-            else:
-                hora = st.selectbox("Horas libres", bloques, placeholder="Elige...")
+    # Inicializar estados de sesión para el semáforo si no existen
+    if 'proceso_pago' not in st.session_state: st.session_state.proceso_pago = False
+    if 'exito_final' not in st.session_state: st.session_state.exito_final = False
 
-    with col_dat:
-        st.subheader("2. Tus Datos")
-        if 'hora' in locals() and hora:
-            with st.form("confirmar"):
-                nom = st.text_input("Nombre *")
-                tel = st.text_input("Teléfono *")
-                mail = st.text_input("Email *", help="Te llegará la invitación aquí")
+    # --- ESCENARIO: ÉXITO FINAL (Ticket) ---
+    if st.session_state.exito_final:
+        st.balloons()
+        data = st.session_state.datos_backup
+        st.success("✅ ¡RESERVA CONFIRMADA!")
+        
+        with st.container(border=True):
+            st.markdown(f"""
+            ### 🎫 Ticket de Atención
+            * 🗓️ **Fecha:** {data['fecha']} - {data['hora']}
+            * 💇 **Servicio:** {data['servicio']}
+            * 👤 **Cliente:** {data['cliente']}
+            * 💳 **Comprobante:** {st.session_state.id_comprobante}
+            """)
+            if st.button("Inicio"): resetear_proceso()
+        st.stop() # Detenemos aquí
+
+    # --- ESCENARIO: FORMULARIO (Si no estamos pagando aún) ---
+    if not st.session_state.proceso_pago:
+        st.info(f"Reservando: **{st.session_state.servicio_seleccionado}** (Abono: ${svc['abono']:,})")
+        
+        c_cal, c_dat = st.columns(2)
+        with c_cal:
+            fecha = st.date_input("Fecha", min_value=datetime.now(ZONA_HORARIA).date())
+            bloques = obtener_bloques_disponibles(fecha, svc['duracion']) if fecha else []
+            hora = st.selectbox("Hora", bloques) if bloques else None
+            if not bloques: st.warning("Sin cupos.")
+
+        with c_dat:
+            with st.form("pre_pago"):
+                nom = st.text_input("Nombre")
+                tel = st.text_input("Teléfono")
+                mail = st.text_input("Email")
+                btn_pagar = st.form_submit_button("💳 Ir a Pagar", type="primary", use_container_width=True)
                 
-                st.divider()
-                st.markdown(f"Abono a pagar: :green[**${svc['abono']:,}**]")
-                
-                if st.form_submit_button("💳 Pagar Abono", type="primary", use_container_width=True):
+                if btn_pagar:
                     ok, msg = validar_datos(nom, mail, tel)
-                    if not ok: st.error(msg)
-                    else:
+                    if ok and hora:
                         datos = {
-                            "fecha": str(fecha), "hora": hora,
-                            "servicio": st.session_state.servicio_seleccionado,
-                            "precio_total": svc['precio_total'],
-                            "abono": svc['abono'], 
-                            "pendiente": svc['pendiente'],
-                            "duracion": svc['duracion'],
-                            "cliente": nom, "email": mail, "tel": tel
+                            "fecha": str(fecha), "hora": hora, "servicio": st.session_state.servicio_seleccionado,
+                            "precio_total": svc['precio_total'], "abono": svc['abono'], "pendiente": svc['pendiente'],
+                            "duracion": svc['duracion'], "cliente": nom, "email": mail, "tel": tel
                         }
-                        link, err = generar_link_pago(datos)
-                        if link: st.link_button("👉 IR A PAGAR", link, type="primary", use_container_width=True)
-                        else: st.error(err)
+                        
+                        with st.spinner("Bloqueando agenda y generando pago..."):
+                            # 1. SEMÁFORO ROJO: Creamos el evento temporal en Calendar
+                            ev_id = reservar_cupo_temporal(datos)
+                            
+                            if ev_id:
+                                # 2. GENERAMOS LINK MP
+                                link, ref = generar_link_pago(datos)
+                                if link:
+                                    # Guardamos todo en sesión para el loop automático
+                                    st.session_state.update({
+                                        "proceso_pago": True, 
+                                        "link_pago": link, 
+                                        "ref_pago": ref,
+                                        "datos_backup": datos, 
+                                        "event_id_temp": ev_id,
+                                        "start_time_pago": datetime.now()
+                                    })
+                                    st.rerun()
+                                else:
+                                    liberar_cupo(ev_id) # Si falla MP, liberamos el cupo
+                                    st.error("Error conectando con el banco.")
+                            else:
+                                st.error("No se pudo bloquear el horario. Intente otro.")
+                    else:
+                        st.error(msg or "Selecciona una hora.")
+
+    # --- ESCENARIO: ESPERANDO PAGO (El Loop) ---
+    else:
+        st.info("⚠️ **Tu cupo está reservado por 5 minutos.**")
+        st.write("Por favor, realiza el pago en la pestaña que se abrirá.")
+        
+        # Botón que abre MP en nueva pestaña
+        st.link_button(f"👉 Pagar ${svc['abono']:,} en MercadoPago", st.session_state.link_pago, type="primary", use_container_width=True)
+        
+        st.divider()
+        
+        # AQUÍ INVOCAMOS AL FRAGMENTO AUTOMÁTICO
+        panel_espera_pago()
+        
+        # Botón de escape manual
+        if st.button("Cancelar y Liberar Hora"):
+            liberar_cupo(st.session_state.event_id_temp)
+            st.session_state.proceso_pago = False
+            st.rerun()
