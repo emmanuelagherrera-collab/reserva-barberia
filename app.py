@@ -29,6 +29,15 @@ ZONA_HORARIA = pytz.timezone('America/Santiago')
 
 st.set_page_config(page_title="Reserva Estilo", page_icon="💈", layout="wide")
 
+# VERIFICACIÓN DE ESTADO DE CUENTA (KILL SWITCH)
+try:
+    if st.secrets["sistema"]["estado_cuenta"] != "ACTIVO":
+        st.error("⚠️ SERVICIO SUSPENDIDO")
+        st.warning("La suscripción de este local se encuentra vencida. Por favor contacte a soporte para reactivar el sistema de reservas.")
+        st.stop() # Esto detiene la ejecución del resto del código
+except:
+    pass # Si no existe la variable, asumimos que está activo
+
 # 3. Carga Segura de Credenciales Google
 try:
     if "google_credentials" in st.secrets:
