@@ -530,7 +530,7 @@ with st.sidebar:
             st.success("Acceso Concedido")
             st.markdown("### Panel de Control")
             # Reemplaza con tus links reales
-            st.link_button("📊 Editar Servicios (Excel)", "https://docs.google.com/spreadsheets/...", icon="📝")
+            st.link_button("📊 Editar Servicios (Excel)", "https://docs.google.com/spreadsheets/d/1bDuKqoqvjZ4b-2i007s11AfMWQ5lmk4tbHFqVM350Ao/edit?gid=0#gid=0", icon="📝")
             st.link_button("📁 Carpeta de Imágenes (Drive)", "https://drive.google.com/...", icon="📷")
             st.info("💡 Tip: Recuerda que los cambios en Excel tardan unos segundos en reflejarse.")
 #--FIN NUEVO CODIGO
