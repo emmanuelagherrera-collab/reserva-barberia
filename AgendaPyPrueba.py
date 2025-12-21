@@ -521,6 +521,20 @@ with st.sidebar:
     st.write(""); st.caption("📍 Av. Siempre Viva 123")
     st.map(UBICACION_LAT_LON, zoom=15, size=20, height=150, use_container_width=True)
 
+#--NUEVO CODIGO
+    st.divider() # Una línea para separar visualmente
+    with st.sidebar.expander("🔐 Administración"):
+        pass_admin = st.text_input("Contraseña", type="password")
+        # Asegúrate de haber configurado esta clave en secrets.toml
+        if "admin_password" in st.secrets and pass_admin == st.secrets["admin_password"]:
+            st.success("Acceso Concedido")
+            st.markdown("### Panel de Control")
+            # Reemplaza con tus links reales
+            st.link_button("📊 Editar Servicios (Excel)", "https://docs.google.com/spreadsheets/d/1bDuKqoqvjZ4b-2i007s11AfMWQ5lmk4tbHFqVM350Ao/edit?gid=0#gid=0", icon="📝")
+            st.link_button("📁 Carpeta de Imágenes (Drive)", "https://drive.google.com/drive/u/0/folders/1HJ6jGT09lAWuqKizZ7BEWZJUVQ4YhCfs", icon="📷")
+            st.info("💡 Tip: Recuerda que los cambios en Excel tardan unos segundos en reflejarse.")
+#--FIN NUEVO CODIGO
+
 # ==========================================
 # 🖥️ CUERPO PRINCIPAL
 # ==========================================
