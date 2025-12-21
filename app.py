@@ -522,7 +522,7 @@ with st.sidebar:
     st.map(UBICACION_LAT_LON, zoom=15, size=20, height=150, use_container_width=True)
 
 #--NUEVO CODIGO
-st.divider() # Una línea para separar visualmente
+    st.divider() # Una línea para separar visualmente
     with st.sidebar.expander("🔐 Administración"):
         pass_admin = st.text_input("Contraseña", type="password")
         # Asegúrate de haber configurado esta clave en secrets.toml
